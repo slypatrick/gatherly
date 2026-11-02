@@ -127,3 +127,84 @@ html body #g40ProfileOut{display:inline-flex;align-items:center;gap:8px;padding:
 html body #g40ProfileOut:hover{background:rgba(255,107,122,.22)}
 html body #g40ProfileOut:active{transform:scale(.96)}
 html body #topAvatar:not(#g40x) svg{filter:invert(1) brightness(.95)}
+
+/* =====================================================================
+   Profile dialog — dark premium sheet
+   ===================================================================== */
+html body .form-dialog.g8-profile-dialog:not(#g40x){background:radial-gradient(120% 60% at 50% -10%,rgba(189,255,114,.10),transparent 60%),linear-gradient(180deg,#18181e,#0f0f13)!important;color:var(--u-text)!important;border:1px solid var(--u-line-strong)!important;border-radius:30px!important;padding:14px 18px 22px!important;box-shadow:0 40px 90px -20px rgba(0,0,0,.9)!important}
+@media(max-width:860px){html body .g8-profile-dialog::before{background:rgba(255,255,255,.2)!important;margin:2px auto 12px!important}}
+html body .g8-profile-dialog *{scrollbar-color:#34343d transparent}
+html body .g8-profile-dialog .g8-profile-top{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--u-line)!important;padding-bottom:12px;margin-bottom:16px}
+html body .g8-profile-dialog .g8-profile-top strong{color:var(--u-lime)!important;letter-spacing:.2em;font-size:11px;font-weight:800}
+html body .g8-profile-dialog #g8ProfileHome:not(#g40x){background:var(--u-raised)!important;color:var(--u-text)!important;border:1px solid var(--u-line)!important;border-radius:999px!important;padding:9px 16px!important;font-weight:700;min-height:40px;box-shadow:none!important}
+html body .g8-profile-dialog #g8ProfileHome:not(#g40x):active{transform:scale(.96)}
+
+/* hero */
+html body .g8-profile-dialog .g8-profile-hero{display:grid!important;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+html body .g8-profile-dialog .g5-profile-card:not(#g40x){grid-column:1/-1;display:flex;align-items:center;gap:16px;background:linear-gradient(135deg,rgba(189,255,114,.14),rgba(191,166,245,.10) 60%,rgba(255,255,255,.03))!important;border:1px solid var(--u-line-strong)!important;border-radius:24px!important;padding:18px!important;box-shadow:none!important}
+html body .g8-profile-dialog .g5-profile-card strong{color:var(--u-text)!important;font-size:21px;font-weight:800;letter-spacing:-.03em;display:block}
+html body .g8-profile-dialog .g5-profile-card small{color:var(--u-muted)!important;display:block;margin-top:4px;line-height:1.4;font-size:12.5px}
+html body .g8-profile-dialog .g5-profile-card .g5-avatar{width:68px;height:68px;min-width:68px;border-radius:50%;display:grid;place-items:center;font-size:32px;background:var(--u-raised)!important;border:2px solid var(--u-lime);box-shadow:0 0 0 5px rgba(189,255,114,.12);overflow:hidden}
+html body .g8-profile-dialog .g5-profile-card .g5-avatar img{width:100%;height:100%;object-fit:cover}
+html body .g8-profile-dialog #g32ProfileSettings:not(#g40x),html body .g8-profile-dialog #g40ProfileOut:not(#g40x){width:100%;min-height:48px;margin:0;justify-content:center;border-radius:16px!important;font-weight:800;font-size:13.5px;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+html body .g8-profile-dialog #g32ProfileSettings:not(#g40x){background:var(--u-raised)!important;color:var(--u-text)!important;border:1px solid var(--u-line-strong)!important}
+html body .g8-profile-dialog .g40-out-row{margin:0!important;display:flex}
+html body .g8-profile-dialog #g40ProfileOut:not(#g40x){background:rgba(255,107,122,.10)!important;color:#ff8f9b!important;border:1px solid rgba(255,107,122,.38)!important}
+html body .g8-profile-dialog #g40ProfileOut:not(#g40x):hover{background:rgba(255,107,122,.18)!important}
+
+/* tabs: segmented control */
+html body .g8-profile-dialog .g8-profile-tabs:not(#g40x){display:grid!important;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;background:var(--u-surface)!important;border:1px solid var(--u-line)!important;border-radius:18px!important;margin:0 0 18px!important}
+html body .g8-profile-dialog .g8-profile-tabs button:not(#g40x){background:transparent!important;color:var(--u-muted)!important;border:0!important;border-radius:14px!important;min-height:42px;font-weight:700;font-size:13px;transition:background .25s var(--u-ease),color .2s;box-shadow:none!important}
+html body .g8-profile-dialog .g8-profile-tabs button[aria-selected="true"]:not(#g40x){background:var(--u-lime)!important;color:var(--u-lime-ink)!important;font-weight:800}
+
+/* form */
+html body .g8-profile-dialog .field{color:var(--u-muted)!important;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;display:block;margin:0 0 14px}
+html body .g8-profile-dialog .field input:not(#g40x),html body .g8-profile-dialog .field textarea:not(#g40x),html body .g8-profile-dialog .field select:not(#g40x){display:block;width:100%;margin-top:8px;background:var(--u-surface)!important;color:var(--u-text)!important;border:1px solid var(--u-line-strong)!important;border-radius:16px!important;padding:14px 16px!important;font-size:16px!important;font-weight:600;letter-spacing:0;text-transform:none;min-height:52px}
+html body .g8-profile-dialog textarea:not(#g40x){min-height:96px!important;resize:vertical}
+html body .g8-profile-dialog .field input::placeholder,html body .g8-profile-dialog .field textarea::placeholder{color:#6f6a79!important;font-weight:500}
+html body .g8-profile-dialog .field input:focus:not(#g40x),html body .g8-profile-dialog .field textarea:focus:not(#g40x){border-color:rgba(189,255,114,.75)!important;box-shadow:0 0 0 4px rgba(189,255,114,.14)!important;outline:none!important}
+html body .g8-profile-dialog .g8-avatar-tools:not(#g40x){background:var(--u-surface)!important;border:1px dashed var(--u-line-strong)!important;border-radius:20px!important;padding:16px!important;margin:0 0 16px!important;display:grid;gap:14px}
+html body .g8-profile-dialog .g8-avatar-tools>button:not(#g40x){background:var(--u-lime-soft)!important;color:var(--u-lime)!important;border:1px solid rgba(189,255,114,.35)!important;border-radius:14px!important;min-height:48px;font-weight:800}
+html body .g8-profile-dialog .g5-avatar-preview{display:flex;align-items:center;gap:14px}
+html body .g8-profile-dialog .g5-avatar-preview small{color:var(--u-muted)!important}
+html body .g8-profile-dialog .g5-avatar-preview .g5-avatar{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;font-size:26px;background:var(--u-raised)!important;overflow:hidden}
+html body .g8-profile-dialog .g5-actions{display:grid!important;grid-template-columns:1fr 1.5fr;gap:10px;margin-top:6px}
+html body .g8-profile-dialog .g5-actions .btn:not(#g40x){min-height:52px;border-radius:16px!important;font-weight:800;border:1px solid var(--u-line-strong)!important;background:var(--u-raised)!important;color:var(--u-text)!important;box-shadow:none!important}
+html body .g8-profile-dialog .g5-actions .btn.primary:not(#g40x){background:linear-gradient(145deg,#d3ff9a,#a6f04f)!important;color:var(--u-lime-ink)!important;border:0!important;box-shadow:0 12px 26px -10px rgba(166,240,79,.6)!important}
+
+/* collections tab */
+html body .g8-profile-dialog .g22-library-head h3,html body .g8-profile-dialog .g8-pane-heading{color:var(--u-text)!important;letter-spacing:-.02em}
+html body .g8-profile-dialog .g22-count{background:var(--u-lime-soft)!important;color:var(--u-lime)!important;border-radius:999px;padding:3px 11px;font-weight:800}
+html body .g8-profile-dialog .g22-hint,html body .g8-profile-dialog .g8-pane-sub,html body .g8-profile-dialog .g22-spaces-note{color:var(--u-muted)!important}
+html body .g8-profile-dialog .g22-hint strong{color:var(--u-text)}
+html body .g8-profile-dialog .g22-folder:not(#g40x){background:var(--u-surface)!important;border:1px solid var(--u-line)!important;border-radius:20px!important;color:var(--u-text)!important;transition:background .2s,transform .18s var(--u-ease)}
+html body .g8-profile-dialog .g22-folder:not(#g40x):hover{background:var(--u-raised)!important}
+html body .g8-profile-dialog .g22-folder:active{transform:scale(.985)}
+html body .g8-profile-dialog .g22-info strong{color:var(--u-text)!important}
+html body .g8-profile-dialog .g22-info small,html body .g8-profile-dialog .g22-arrow{color:var(--u-muted)!important}
+html body .g8-profile-dialog .g22-thumb{border-radius:14px!important;overflow:hidden}
+html body .g8-profile-dialog .g22-new:not(#g40x){background:transparent!important;color:var(--u-lime)!important;border:1px dashed rgba(189,255,114,.5)!important;border-radius:18px!important;min-height:50px;font-weight:800}
+html body .g8-profile-dialog .g22-spaces:not(#g40x){background:var(--u-surface)!important;border:1px solid var(--u-line)!important;border-radius:20px!important;color:var(--u-text)!important}
+html body .g8-profile-dialog .g22-spaces summary{color:var(--u-text)!important;font-weight:700}
+html body .g8-profile-dialog .g5-board:not(#g40x){background:var(--u-raised)!important;color:var(--u-text)!important;border:1px solid var(--u-line)!important;border-radius:16px!important}
+html body .g8-profile-dialog .g5-board.active:not(#g40x){border-color:var(--u-lime)!important}
+html body .g8-profile-dialog .g5-board small{color:var(--u-muted)!important}
+
+/* sign-in tab */
+html body .g8-profile-dialog .g6-link-google:not(#g40x){background:var(--u-surface)!important;border:1px solid var(--u-line)!important;border-radius:20px!important;color:var(--u-text)!important;padding:16px!important}
+html body .g8-profile-dialog .g6-link-google h3{color:var(--u-text)!important}
+html body .g8-profile-dialog .g6-link-google p{color:var(--u-muted)!important}
+html body .g8-profile-dialog .g8-signout-row{border-top:1px solid var(--u-line)!important}
+html body .g8-profile-dialog #g5Logout:not(#g40x){background:rgba(255,107,122,.10)!important;color:#ff8f9b!important;border:1px solid rgba(255,107,122,.38)!important;border-radius:16px!important;min-height:50px;width:100%;font-weight:800}
+
+/* close button */
+html body .g8-profile-dialog .g27-dialog-close:not(#g40x){background:var(--u-raised)!important;color:var(--u-text)!important;border:1px solid var(--u-line-strong)!important;border-radius:50%!important}
+html body .g8-profile-dialog .g8-profile-top:not(#g40x){background:transparent!important;padding-left:0!important;padding-right:0!important}
+html body .g8-profile-dialog .g8-profile-hero:not(#g40x){grid-template-columns:minmax(0,1fr) auto!important;background:transparent!important;padding:0!important;border:0!important}
+html body .g8-profile-dialog .g5-profile-card:not(#g40x){min-width:0}
+html body .g8-profile-dialog .g5-profile-card>div{min-width:0}
+html body .g8-profile-dialog #g32ProfileSettings:not(#g40x){white-space:normal!important;line-height:1.2;font-size:12.5px;text-align:center;padding:8px 12px!important;min-width:0}
+html body .g8-profile-dialog #g40ProfileOut:not(#g40x){padding:0 16px!important;width:auto}
+html body .g8-profile-dialog .g5-actions:not(#g40x){display:flex!important;gap:10px}
+html body .g8-profile-dialog .g5-actions .btn:not(#g40x){flex:1 1 0}
+html body .g8-profile-dialog .g5-actions .btn.primary:not(#g40x){flex:2 1 0}
