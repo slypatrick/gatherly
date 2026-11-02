@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gatherly-compare",
+  "main": "dist/gatherly-compare.js",
+  "compatibility_date": "2026-10-31",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "GATHERLY_KV",
+      "id": "REPLACE_WITH_NEW_PRODUCTION_KV_NAMESPACE_ID"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "0 7 * * *"
+    ]
+  }
+}

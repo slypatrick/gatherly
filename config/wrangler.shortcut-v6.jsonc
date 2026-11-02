@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gatherly-shortcut-v6",
+  "main": "workers/gatherly-shortcut-v6.js",
+  "compatibility_date": "2026-10-31",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "REPLACE_WITH_NEW_SHORTCUT_KV_NAMESPACE_ID"
+    }
+  ]
+}

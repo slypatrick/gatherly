@@ -1,0 +1,448 @@
+r|save-device|unsupportedbrowser)(?:\/|$|\?)/i.test(page.pathname))return true;
+ }catch{}
+ const fragment=String(html||"").slice(0,150000);
+ return /please log in to see this page|please log in to continue|please log in to view this page|you must log in to (?:continue|see|view)|not logged in[\s\S]{0,250}please log in|log in to see (?:this|the) (?:page|post)|please sign in to see this content/i.test(fragment);
+}
+function g26FacebookImageCandidate(raw){
+ try{
+  const u=v8SafeURL(raw);
+  if(!u)return false;
+  const host=u.hostname.toLowerCase();
+  if(host==="static.xx.fbcdn.net"&&/\/rsrc\.php(?:$|\/)/.test(u.pathname))return false;
+  if(/\/(?:login|logo|favicon|sprite|placeholder|default-avatar)\b/i.test(u.pathname))return false;
+  return true;
+ }catch{return false}
+}
+
+/* Gatherly V26.1 — identify real Marketplace listing behind Facebook share/login redirects */
+function g271MarketplaceFromUrl(value){
+ let cursor=String(value||"");
+ for(let depth=0;depth<5;depth++){
+  const u=v8SafeURL(cursor);
+  if(!u||!g26IsFacebookURL(u.href))break;
+  const found=u.pathname.match(/^\/marketplace\/item\/(\d+)(?:\/|$)/i);
+  if(found)return "https://www.facebook.com/marketplace/item/"+found[1]+"/";
+  const redirect=u.searchParams.get("next")||u.searchParams.get("redirect_uri");
+  if(!redirect||redirect===cursor)break;
+  cursor=redirect;
+ }
+ return "";
+}
+function g271MarketplaceFromHtml(html){
+ const tags=String(html||"").match(/<meta\b[^>]*>/gi)||[];
+ for(const tag of tags.slice(0,120)){
+  const attr=v8Attrs(tag);
+  if(String(attr["http-equiv"]||"").toLowerCase()!=="refresh")continue;
+  const m=String(attr.content||"").match(/(?:^|;)\s*url\s*=\s*["']?(.+?)["']?\s*$/i);
+  if(!m)continue;
+  try{
+   const redirected=new URL(m[1].replace(/&amp;/g,"&"),"https://www.facebook.com/");
+   const canonical=g271MarketplaceFromUrl(redirected.href);
+   if(canonical)return canonical;
+  }catch{}
+ }
+ return "";
+}
+function g271RestrictedPreview(fallback,originalUrl,finalUrl,html=""){
+ const marketplaceUrl=g271MarketplaceFromUrl(finalUrl)||g271MarketplaceFromHtml(html)||g271MarketplaceFromUrl(originalUrl);
+ if(!marketplaceUrl)return {...fallback,restricted:true};
+ return {...fallback,title:"Facebook Marketplace listing",marketplaceUrl,restricted:true,
+  notice:"This link leads to a Facebook Marketplace listing, but Facebook requires a login to view its photos. Open the original listing in Facebook and upload a screenshot or photo; Gatherly will keep your shared link."};
+}
+
+
+/* Gatherly V31: schema.org product metadata and verified TND conversion */
+const g31Rates=new Map();
+function g31Text(x){return x==null?"":typeof x==="object"?String(x.name||x.value||"").trim():String(x).trim()}
+function g31Currency(c,price=""){const s=g31Text(c).toUpperCase();if(/^[A-Z]{3}$/.test(s))return s;const t=g31Text(price);return /€/.test(t)?"EUR":/£/.test(t)?"GBP":/(?:\bTND\b|\bDT\b|د\.?ت)/i.test(t)?"TND":""}
+function g31Number(x,currency=""){
+ const raw=g31Text(x);if(!raw||raw.length>80)return null;let n=raw.replace(/[^\d.,-]/g,"");if(!n||n.startsWith("-"))return null;
+ const c=n.lastIndexOf(","),d=n.lastIndexOf(".");
+ if(c>=0&&d>=0)n=c>d?n.replace(/\./g,"").replace(",","."):n.replace(/,/g,"");
+ else if(c>=0)n=n.length-c-1===3&&currency!=="TND"?n.replace(/,/g,""):n.replace(",",".");
+ else if(d>=0&&n.length-d-1===3&&n.indexOf(".")!==d)n=n.replace(/\./g,"");
+ const value=Number(n);return Number.isFinite(value)&&value>=0&&value<1e11?value:null
+}
+function g31JSON(v){if(typeof v==="string"){try{return JSON.parse(v)}catch{return null}}return v}
+function g31Origin(raw){const d=g31JSON(raw);if(!d||typeof d!=="object"||Array.isArray(d))return null;const currency=g31Currency(d.currency),amount=g31Number(d.amount,currency),rate=Number(d.rate);if(amount===null||!currency)return null;return {amount,currency,rate:Number.isFinite(rate)&&rate>0?rate:null,date:g31Text(d.date).slice(0,20),provider:g31Text(d.provider).slice(0,60),source:g31Text(d.source).slice(0,80)}}
+function g31SchemaVal(v){if(Array.isArray(v))return g31SchemaVal(v[0]);return v&&typeof v==="object"?g31Text(v.name||v.value||v["@id"]||""):g31Text(v)}
+function g31Structure(html,meta){
+ const nodes=[],addNode=(v,depth=0)=>{
+  if(!v||depth>6||nodes.length>100)return;
+  if(Array.isArray(v)){for(const x of v.slice(0,25))addNode(x,depth+1);return}
+  if(typeof v!=="object")return;
+  if(String(v["@type"]||"").toLowerCase().includes("product"))nodes.push(v);
+  for(const k of ["@graph","mainEntity","itemListElement"])if(v[k])addNode(v[k],depth+1)
+ };
+ for(const tag of String(html).matchAll(/<script\b[^>]*type\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi)){
+  if(tag[1].length>180000)continue;try{addNode(JSON.parse(tag[1]))}catch{}
+  if(nodes.length>80)break
+ }
+ const p=nodes.find(n=>n.offers)||nodes[0];if(!p)return meta;
+ const offer=Array.isArray(p.offers)?p.offers[0]:p.offers||{},o=offer&&typeof offer==="object"?offer:{};
+ const ps=o.priceSpecification&&typeof o.priceSpecification==="object"?o.priceSpecification:{};
+ const price=o.price??o.lowPrice??ps.price??p.price,cur=o.priceCurrency||ps.priceCurrency||p.priceCurrency;
+ const out={...meta};
+ if(g31Number(price)!==null){out.price=String(price);out.currency=g31Currency(cur,price)||out.currency;out.priceSource="schema.org Product/Offer"}
+ if(!out.title||out.title===out.source)out.title=g31SchemaVal(p.name).slice(0,140)||out.title;
+ if(!out.description)out.description=g31SchemaVal(p.description).slice(0,600);
+ const specs=[],seen=new Set(),add=(k,v)=>{const name=g31Text(k).slice(0,65),value=g31SchemaVal(v).slice(0,180);if(name&&value&&!seen.has(name.toLowerCase())&&specs.length<24){seen.add(name.toLowerCase());specs.push({name,value})}};
+ for(const [k,name] of [["material","Material"],["color","Color"],["size","Size"],["weight","Weight"],["width","Width"],["height","Height"],["depth","Depth"],["sku","SKU"],["gtin","GTIN"]])if(p[k]!=null)add(name,p[k]);
+ for(const x of Array.isArray(p.additionalProperty)?p.additionalProperty.slice(0,25):[])if(x&&typeof x==="object")add(x.name||x.propertyID,x.value);
+ const availability=g31SchemaVal(o.availability).split("/").pop(),condition=g31SchemaVal(o.itemCondition).split("/").pop();
+ out.structuredCompare={brand:g31SchemaVal(p.brand).slice(0,180),model:g31SchemaVal(p.model).slice(0,180),availability:availability.slice(0,140),condition:condition.slice(0,140),specs};
+ return out
+}
+const g31OldMetadata=v8Metadata;
+v8Metadata=function(html,url){const meta=g31OldMetadata(html,url);return html?g31Structure(html,meta):meta};
+async function g31Rate(from){
+ if(from==="TND")return {rate:1,date:"",provider:"Original currency"};
+ const cached=g31Rates.get(from);if(cached?.until>Date.now())return cached.value;
+ const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),5000);
+ try{
+  const response=await fetch("https://api.frankfurter.dev/v2/rates?base="+encodeURIComponent(from)+"&quotes=TND",{signal:abort.signal,headers:{Accept:"application/json"}});
+  if(!response.ok)throw Error("FX unavailable");
+  const data=await response.json(),rows=Array.isArray(data)?data:Array.isArray(data?.rates)?data.rates:[data];
+  const row=rows.find(x=>String(x.quote||x.to||"").toUpperCase()==="TND");
+  const rate=Number(row?.rate);
+  if(!Number.isFinite(rate)||rate<=0||rate>1000000)throw Error("No TND rate");
+  const value={rate,date:g31Text(row.date||data.date).slice(0,16),provider:"Frankfurter"};
+  g31Rates.set(from,{until:Date.now()+21600000,value});return value
+ }finally{clearTimeout(timer)}
+}
+async function g31Preview(data){
+ const d={...data},originCurrency=g31Currency(d.currency,d.price),amount=g31Number(d.price,originCurrency);
+ d.currency="TND";d.originalPrice=amount;d.originalCurrency=originCurrency;d.priceOrigin=null;
+ if(amount===null){d.price="";d.priceStatus="unavailable";d.priceNotice="Price not publicly available. Add a verified TND price.";return d}
+ if(!originCurrency){d.price="";d.priceStatus="currency_unknown";d.priceNotice="A price was detected but its currency is unknown. Enter its TND equivalent.";return d}
+ try{
+  const fx=await g31Rate(originCurrency);
+  d.price=(Math.round(amount*fx.rate*1000)/1000).toFixed(3);d.priceStatus="found";
+  d.priceOrigin={amount,currency:originCurrency,rate:fx.rate,date:fx.date,provider:fx.provider,source:d.priceSource||"public listing"};
+  d.priceNotice=originCurrency==="TND"?"Price found in TND":"Converted from "+originCurrency+" "+amount+" using "+fx.provider+" rate"+(fx.date?" ("+fx.date+")":"");
+  return d
+ }catch{
+  d.price="";d.priceStatus="conversion_unavailable";
+  d.priceOrigin={amount,currency:originCurrency,rate:null,date:"",provider:"",source:d.priceSource||"public listing"};
+  d.priceNotice="Original price: "+originCurrency+" "+amount+". Rate unavailable; enter a verified TND amount.";
+  return d
+ }
+}
+async function g31Write(raw,old){
+ if(!raw||typeof raw!=="object"||Array.isArray(raw))return raw;
+ const d={...raw},touch=Object.prototype.hasOwnProperty.call(d,"price")||Object.prototype.hasOwnProperty.call(d,"currency");
+ if(!touch)return d;
+ const currency=g31Currency(d.currency||old?.currency||"TND");
+ if(!currency)throw Error("Currency could not be verified");
+ const amount=g31Number(d.price??old?.price,currency);
+ if(g31Text(d.price??old?.price)&&amount===null)throw Error("Enter a valid nonnegative price");
+ if(currency!=="TND"&&amount!==null){
+  const fx=await g31Rate(currency);
+  d.price=(amount*fx.rate).toFixed(3);d.currency="TND";
+  d.priceOrigin={amount,currency,rate:fx.rate,date:fx.date,provider:fx.provider,source:"user entry"}
+ }else if(currency!=="TND"&&amount===null){d.currency="TND"}
+ else {d.currency="TND";if(Object.prototype.hasOwnProperty.call(d,"price")&&!Object.prototype.hasOwnProperty.call(d,"priceOrigin"))d.priceOrigin=null}
+ return d
+}
+
+async function g26PublicPreview(raw){
+ const original=v8SafeURL(g26UnwrapFacebookOutbound(v8ExtractLink(raw)));
+ if(!original)throw Error("Enter a valid public website URL");
+ const isFB=g26IsFacebookURL(original.href);
+ const fallback=v8Metadata("",original.href);fallback.url=original.href;fallback.fetched=false;
+ if(isFB)fallback.notice="Facebook did not expose this post to external apps. The original link is preserved. Add a screenshot or upload its photos to save the discovery.";
+ try{
+  const {resp,url:final}=await v8FetchRemote(original.href);
+  const contentType=(resp.headers.get("content-type")||"").toLowerCase();
+
+  if(contentType.startsWith("image/"))return {...fallback,title:original.pathname.split("/").pop()||fallback.title,image:final.href,images:[final.href],url:original.href,fetched:true,notice:""};
+  if(contentType&&!/html|text\/plain/.test(contentType))return {...fallback,notice:isFB?fallback.notice:"This website does not provide a public page preview."};
+  const html=await v15ReadPreview(resp,1000000);
+  if(isFB&&g26FacebookLoginScreen(html,final.href))return g271RestrictedPreview(fallback,original.href,final.href,html);
+  const data=v8Metadata(html,final.href);
+  if(isFB){
+   data.url=original.href;
+   const publicImages=v15Images(data.images,data.image).filter(g26FacebookImageCandidate).slice(0,8);
+   data.images=publicImages;
+   data.image=publicImages[0]||"";
+   const title=String(data.title||"").trim();
+   if(!title||/^(facebook|facebook discovery|log in|login|sign up)(?:\s*[-|·].*)?$/i.test(title)){
+    data.title=fallback.title;
+   }
+   const usableTitle=data.title!==fallback.title;
+   if(!data.image&&!usableTitle&&!data.description){
+    return g271RestrictedPreview(fallback,original.href,final.href,html);
+   }
+   if(!data.image)data.notice="Facebook provided some public details, but no downloadable post photos. Upload a screenshot or the original image to complete this discovery.";
+   data.restricted=false;
+   data.fetched=!!(data.image||usableTitle||data.description);
+  }
+  return data;
+ }catch(error){
+  if(isFB)return g271RestrictedPreview(fallback,original.href,"","");
+  return {...fallback,notice:"This website blocks automated previews or has no accessible metadata. You can still save its link and upload your own photos."};
+ }
+}
+async function v8PreviewEndpoint(req,user,urlObj){
+ if(req.method!=="GET")return fail("Method not allowed",405);
+ if(!await v8Authorize(req,user))return fail("Open a collection or sign in first",403);
+ const url=v8ExtractLink(urlObj.searchParams.get("url"));
+ if(!v8SafeURL(url))return fail("Enter a valid public website URL",400);
+ return js(await g31Preview(await g26PublicPreview(url)));
+}
+
+async function v8ImportImageEndpoint(req,user){
+ if(req.method!=="POST")return fail("Method not allowed",405);
+ if(!await v8Authorize(req,user))return fail("Collection access required",403);
+ if(Number(req.headers.get("content-length")||0)>5000)return fail("Invalid request",413);
+ const body=await req.json().catch(()=>({}));
+ const url=v8SafeURL(body.url);
+ if(!url)return fail("Invalid image URL",400);
+ try{
+  const {resp}=await v8FetchRemote(url.href,{image:true});
+  const contentType=(resp.headers.get("content-type")||"").split(";")[0].toLowerCase();
+  if(!["image/jpeg","image/png","image/webp"].includes(contentType))return fail("This website does not provide a supported image",415);
+  const bytes=await v8ReadBounded(resp,2050000);
+  if(bytes.length<20||!mediaKind(bytes))return fail("Invalid image",415);
+  const id=crypto.randomUUID();
+  let binary="";for(let i=0;i<bytes.length;i+=16384)binary+=String.fromCharCode(...bytes.subarray(i,i+16384));
+  await GATHERLY_KV.put("m:"+id,JSON.stringify({type:contentType,data:btoa(binary),created:Date.now(),u:user?.id||null}));
+  return js({url:new URL(req.url).origin+"/media/"+id,stored:true});
+ }catch{return fail("Image could not be copied; original URL may still work",422)}
+}
+
+
+/* Gatherly V8: native iPhone Share Sheet handoff, no browser launch. */
+async function v8ShortcutPrepare(req,u){
+ if(req.method!=="GET")return fail("Method not allowed",405);
+ const boardLink=String(u.searchParams.get("board")||"");
+ const incoming=v8ExtractLink(u.searchParams.get("url")||"");
+ if(boardLink.length>2200||incoming.length>2200)return fail("Link too long",413);
+ let boardURL;
+ try{boardURL=new URL(boardLink)}catch{return fail("Configure your Gatherly invite link in the shortcut",400)}
+ if(boardURL.origin!==u.origin)return fail("Use your Gatherly collection invite link",400);
+ const id=boardURL.searchParams.get("b")||"",key=boardURL.searchParams.get("k")||"";
+ if(!/^[a-f0-9-]{36}$/i.test(id)||key.length<15)return fail("Invalid Gatherly collection link",403);
+ const board=await GATHERLY_KV.get("b:"+id,"json");
+ if(!board||await hashed(key)!==board.hash)return fail("Invite link is invalid or has expired",403);
+ const url=v8SafeURL(incoming);if(!url)return fail("No public webpage URL found in the shared post",400);
+ let meta=await g26PublicPreview(url.href);
+ const categories=["Products","Websites","Inspiration","Places","Other"];
+ const cols=Array.isArray(board.collections)&&board.collections.length?board.collections:[{id:"default",name:board.title||"My wishlist",icon:"💜"}];
+ const collectionChoices=cols.map((c,i)=>({id:c.id,label:(c.icon||"✦")+" "+c.name+" · "+(i+1)}));
+ const token=authB64(authBytes(28));
+ await GATHERLY_KV.put("shortcut:draft:"+await authDigest(token),JSON.stringify({id,metadata:{...meta,url:url.href},collections:collectionChoices,created:Date.now()}),{expirationTtl:3600});
+ const inboxKey="shortcut:inbox:"+id;
+ const pending=await GATHERLY_KV.get(inboxKey,"json")||{entries:[]};
+ const entries=(Array.isArray(pending.entries)?pending.entries:[]).filter(x=>x&&Date.now()-Number(x.created||0)<3600000&&x.token!==token).slice(-7);
+ entries.push({token,created:Date.now(),title:String(meta.title||"Shared discovery").slice(0,140)});
+ await GATHERLY_KV.put(inboxKey,JSON.stringify({entries}),{expirationTtl:3600});
+ const openUrl=new URL("/",u.origin);openUrl.searchParams.set("b",id);openUrl.searchParams.set("k",key);openUrl.searchParams.set("draft",token);openUrl.searchParams.set("new","1");
+ return authJson({token,openUrl:openUrl.href,needsReview:true,title:meta.title,description:meta.description||"",image:meta.image||"",images:meta.images||[],categories,collections:collectionChoices.map(c=>c.label)});
+}
+
+/* Gatherly V16 — user-controlled Shortcut draft handoff (never saves automatically) */
+async function v16ShortcutDraft(req,user,u){
+ if(req.method!=="GET")return fail("Method not allowed",405);
+ const token=String(u.searchParams.get("token")||"");
+ if(!/^[A-Za-z0-9_-]{32,80}$/.test(token))return fail("Invalid shortcut draft",400);
+ if(!await v8Authorize(req,user))return fail("Open the shared Gatherly board first",403);
+ const draft=await GATHERLY_KV.get("shortcut:draft:"+await authDigest(token),"json");
+ if(!draft||Date.now()-Number(draft.created||0)>3600000)return fail("This shared link has expired. Share it again from the original app.",410);
+ const boardId=req.headers.get("X-Board-ID")||"";
+ if(draft.id!==boardId)return fail("This shared link belongs to a different Gatherly board",403);
+ const meta=draft.metadata||{};
+ const url=v8SafeURL(meta.url);
+ if(!url)return fail("The original shared link is no longer valid",400);
+ const board=await GATHERLY_KV.get("b:"+boardId,"json");
+ const cols=Array.isArray(board?.collections)&&board.collections.length?board.collections:[{id:"default",name:board?.title||"Wishlist"}];
+ return authJson({
+   url:url.href,
+   title:String(meta.title||"").slice(0,140),
+   description:String(meta.description||"").slice(0,600),
+   image:String(meta.image||"").slice(0,2000),
+   images:v15Images(meta.images,meta.image),
+   price:String(meta.price||"").slice(0,50),
+   currency:String(meta.currency||"USD").slice(0,8),
+   source:String(meta.source||new URL(url.href).hostname).slice(0,120),
+   notice:String(meta.notice||"").slice(0,220),
+   collections:cols.map(c=>({id:c.id,name:c.name,icon:c.icon||"✦"})),
+   needsReview:true,
+   saved:false
+ });
+}
+
+
+/* Gatherly V17 — recoverable unsaved shortcut inbox (board-key authorized) */
+async function v17ShortcutInbox(req,user){
+ if(!await v8Authorize(req,user))return fail("Open your Gatherly collection first",403);
+ const boardId=req.headers.get("X-Board-ID")||"";
+ if(!/^[a-f0-9-]{36}$/i.test(boardId))return fail("Invalid board",400);
+ const key="shortcut:inbox:"+boardId;
+ const doc=await GATHERLY_KV.get(key,"json")||{entries:[]};
+ const valid=(Array.isArray(doc.entries)?doc.entries:[])
+  .filter(x=>x&&typeof x.token==="string"&&/^[A-Za-z0-9_-]{32,80}$/.test(x.token)&&Date.now()-Number(x.created||0)<3600000)
+  .slice(-8);
+ if(req.method==="GET"){
+  const item=valid[0];
+  return authJson(item?{pending:true,token:item.token,created:item.created,title:item.title||"Shared discovery",count:valid.length}:{pending:false,count:0});
+ }
+ if(req.method==="POST"){
+  const body=await req.json().catch(()=>({}));
+  const token=String(body.token||"");
+  if(!/^[A-Za-z0-9_-]{32,80}$/.test(token))return fail("Invalid inbox item",400);
+  const remaining=valid.filter(x=>x.token!==token);
+  if(remaining.length===valid.length)return authJson({success:true,count:remaining.length});
+  if(remaining.length)await GATHERLY_KV.put(key,JSON.stringify({entries:remaining}),{expirationTtl:3600});
+  else await GATHERLY_KV.delete(key);
+  return authJson({success:true,count:remaining.length});
+ }
+ return fail("Method not allowed",405);
+}
+
+async function v8ShortcutSave(req,u){
+ if(req.method!=="POST")return fail("Method not allowed",405);
+ let token=u.searchParams.get("token")||"";
+ if(!/^[A-Za-z0-9_-]{32,80}$/.test(token))return fail("Missing save token",400);
+ const key="shortcut:draft:"+await authDigest(token);
+ const draft=await GATHERLY_KV.get(key,"json");
+ if(!draft)return fail("Share expired. Run Save to Gatherly again.",410);
+ const category=String(u.searchParams.get("category")||"");
+ const collectionName=String(u.searchParams.get("collection")||"");
+ if(!["Products","Websites","Inspiration","Places","Other"].includes(category))return fail("Choose a category",400);
+ const collection=draft.collections?.find(c=>c.label===collectionName);
+ if(!collection)return fail("Choose a collection from the list",400);
+ const board=await GATHERLY_KV.get("b:"+draft.id,"json");
+ if(!board||!(collection.id==="default"||board.collections?.some(c=>c.id===collection.id)))return fail("Collection not available",410);
+ const {metadata:meta}=draft;
+ if(!v8SafeURL(meta.url))return fail("Invalid source URL",400);
+ // Expire the one-time handoff before saving, to avoid accidental duplicate taps.
+ await GATHERLY_KV.delete(key);
+ let image=meta.image||"";
+ if(image&&v8SafeURL(image)){
+  try{
+   const {resp}=await v8FetchRemote(image,{image:true});
+   const ct=(resp.headers.get("content-type")||"").split(";")[0].toLowerCase();
+   if(["image/png","image/jpeg","image/webp"].includes(ct)){
+    const bytes=await v8ReadBounded(resp,2050000);
+    if(bytes.length>=20&&mediaKind(bytes)){
+     let binary="";for(let i=0;i<bytes.length;i+=16384)binary+=String.fromCharCode(...bytes.subarray(i,i+16384));
+     let id=crypto.randomUUID();
+     await GATHERLY_KV.put("m:"+id,JSON.stringify({type:ct,data:btoa(binary),created:Date.now(),u:null}));
+     image=u.origin+"/media/"+id;
+    }
+   }
+  }catch{}
+ }
+ const item={id:crypto.randomUUID(),title:String(meta.title||v8Metadata("",meta.url).title).slice(0,140),url:meta.url,notes:String(meta.description||"").slice(0,600),image,price:String(meta.price||"").slice(0,50),currency:meta.currency||"USD",category,collectionId:collection.id,status:"wishlist",rating:"",favorite:false,created:Date.now(),savedBy:null,savedByName:"iPhone Share"};
+ item.images=v15Images(meta.images,item.image);item.image=item.images[0]||"";let initialPrice=proHistoryEntry(item);item.priceHistory=initialPrice?[initialPrice]:[];await GATHERLY_KV.put("i:"+draft.id+":"+item.id,JSON.stringify(item));
+ return authJson({success:true,title:item.title,collection:collectionName,image:!!item.image});
+}
+
+
+/* Gatherly Plus tools — community discussions + manual price history */
+function proPriceNumber(v){
+ const s=String(v??"").trim().replace(/[^\d.,-]/g,"");
+ if(!s||s.length>36)return null;
+ const lastDot=s.lastIndexOf("."),lastComma=s.lastIndexOf(",");
+ let normalized=s;
+ if(lastComma>lastDot)normalized=s.replace(/\./g,"").replace(",",".");
+ else if(lastDot>=0)normalized=s.replace(/,/g,"");
+ else normalized=s.replace(",",".");
+ const num=Number(normalized);
+ return Number.isFinite(num)&&num>=0&&num<1e12?num:null;
+}
+function proHistoryEntry(item){
+ const price=proPriceNumber(item.price);
+ return price===null?null:{at:Date.now(),price,currency:String(item.currency||"USD").toUpperCase().slice(0,8)};
+}
+
+/* Gatherly V20 — shared, month-scoped shopping cart (one KV record per discovery) */
+function g20CartMonth(raw){
+ const m=String(raw||"").match(/^(\d{4})-(0[1-9]|1[0-2])$/);
+ return m&&Number(m[1])>=2020&&Number(m[1])<=2100?m[0]:null;
+}
+function g20CartPrice(raw){
+ if(raw===null||raw===undefined||raw==="")return null;
+ let value=String(raw).trim().replace(/[^\d,.]/g,"");
+ if(!value)return null;
+ const comma=value.lastIndexOf(","),dot=value.lastIndexOf(".");
+ if(comma>dot)value=value.replace(/\./g,"").replace(",",".");
+ else if(dot>comma)value=value.replace(/,/g,"");
+ else value=value.replace(",",".");
+ const n=Number(value);
+ return Number.isFinite(n)&&n>=0&&n<=1000000000?Math.round(n*100)/100:null;
+}
+function g20CartCurrency(raw){
+ const c=String(raw||"TND").trim().toUpperCase();
+ return /^[A-Z]{3}$/.test(c)?c:"TND";
+}
+function g20CartUnit(raw){
+ const n=Number(raw);
+ return Number.isInteger(n)&&n>=1&&n<=999?n:null;
+}
+async function g20CartEndpoint(req,boardId,arr,url,user){
+ const month=g20CartMonth(url.searchParams.get("month")||"");
+ if(!month)return fail("A valid month (YYYY-MM) is required",400);
+ const prefix="cart:"+boardId+":"+month+":";
+ const indexKey="cartidx:"+boardId+":"+month;
+ const itemId=arr[4]||"";
+ if(itemId&&!/^[a-f0-9-]{36}$/i.test(itemId))return fail("Invalid discovery ID",400);
+ if(req.method==="GET"&&arr.length===4){
+  const [listings,indexDoc]=await Promise.all([GATHERLY_KV.list({prefix,limit:500}),GATHERLY_KV.get(indexKey,"json")]);
+  const listedIds=listings.keys.map(k=>k.name.slice(prefix.length));
+  const indexIds=Array.isArray(indexDoc?.ids)?indexDoc.ids:[];
+  const ids=[...new Set([...indexIds,...listedIds])].filter(id=>/^[a-f0-9-]{36}$/i.test(id)).slice(0,500);
+  const stored=(await Promise.all(ids.map(id=>GATHERLY_KV.get(prefix+id,"json")))).filter(Boolean);
+  const live=(await Promise.all(stored.map(x=>GATHERLY_KV.get("i:"+boardId+":"+x.itemId,"json"))));
+  const items=stored.map((rec,i)=>({
+    itemId:rec.itemId,month,quantity:rec.quantity,
+    unitPrice:rec.unitPrice,currency:rec.currency,
+    bought:!!rec.bought,boughtAt:rec.boughtAt||null,
+    note:rec.note||"",addedAt:rec.addedAt||0,updatedAt:rec.updatedAt||0,
+    addedBy:rec.addedBy||null,addedByName:rec.addedByName||"Guest",
+    title:String(live[i]?.title||rec.title||"Saved discovery").slice(0,160),
+    image:String(live[i]?.image||rec.image||"").slice(0,2200),
+    source:String(live[i]?.url||rec.source||"").slice(0,2200),
+    category:String(live[i]?.category||rec.category||"Products").slice(0,48),
+    missingDiscovery:!live[i]
+  })).sort((a,b)=>Number(a.bought)-Number(b.bought)||(b.addedAt||0)-(a.addedAt||0));
+  return js({month,items,hasMore:!listings.list_complete});
+ }
+ if(req.method==="POST"&&arr.length===4){
+  const body=await req.json().catch(()=>({}));
+  const id=String(body.itemId||"");
+  if(!/^[a-f0-9-]{36}$/i.test(id))return fail("Select a valid discovery",400);
+  const item=await GATHERLY_KV.get("i:"+boardId+":"+id,"json");
+  if(!item)return fail("This discovery is no longer available",404);
+  const key=prefix+id;
+  const existing=await GATHERLY_KV.get(key,"json");
+  if(existing)return js({alreadyAdded:true,item:existing});
+  const quantity=body.quantity===undefined?1:g20CartUnit(body.quantity);
+  if(!quantity)return fail("Quantity must be between 1 and 999",400);
+  const unitPrice=body.unitPrice===undefined?g20CartPrice(item.price):g20CartPrice(body.unitPrice);
+  if(body.unitPrice!==undefined&&body.unitPrice!==""&&unitPrice===null)return fail("Enter a valid unit price",400);
+  const now=Date.now();
+  const rec={itemId:id,month,quantity,unitPrice,currency:g20CartCurrency(body.currency||item.currency),
+    bought:false,boughtAt:null,note:"",addedAt:now,updatedAt:now,
+    addedBy:user?.id||null,addedByName:String(user?.name||"Guest").slice(0,60),
+    title:String(item.title||"Saved discovery").slice(0,160),image:String(item.image||"").slice(0,2200),
+    source:String(item.url||"").slice(0,2200),category:String(item.category||"Products").slice(0,48)};
+  await GATHERLY_KV.put(key,JSON.stringify(rec));
+  const index=await GATHERLY_KV.get(indexKey,"json")||{ids:[]};
+  const ids=Array.isArray(index.ids)?index.ids:[];
+  if(!ids.includes(id))await GATHERLY_KV.put(indexKey,JSON.stringify({ids:[...ids,id].slice(-500),updatedAt:now}));
+  const activityBoard=await GATHERLY_KV.get("b:"+boardId,"json");
+  if(activityBoard)await g25BoardActivity(boardId,activityBoard,{type:"cart_added",itemId:id,itemTitle:item.title,collectionId:item.collectionId||"default"},user);
+  return js({success:true,item:rec});
+ }
+ if(!itemId||arr.length!==5)return fail("Discovery required",400);
+ const key=prefix+itemId,previous=await GATHERLY_KV.get(key,"json");
+ if(!previous)return fail("Discovery is not in this month's cart",404);
+ if(req.method==="DELETE"){await GATHERLY_KV.delete(key);const index=await GATHERLY_KV.get(indexKey,"json");if(Array.isArray(index?.ids))await GATHERLY_KV.put(indexKey,JSON.stringify({ids:index.ids.filter(x=>x!==itemId),updatedAt:Date.now()}));return js({success:true})}
+ if(req.method!=="PATCH"&&req.method!=="PUT")return fail("Method not allowed",405);
+ const data=await req.json().catch(()=>({})),next={...previous};
+ if(Object.prototype.hasOwnProperty.call(data,"quantity")){
+  const n=g20CartUnit(data.quantity);if(!n)return fail("Quantity must be between 1 and 999",400);next.quantity=n;
+ }
+ if(Object.prototy

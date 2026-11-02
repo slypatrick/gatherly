@@ -1,0 +1,399 @@
+y .g15-active-photo\");\n  if(!img){card.classList.remove(\"g37-image-pending\");return}\n  const gallery=img.closest(\".g15-gallery\");\n  gallery?.style.setProperty(\"--g37-ratio\",g37Ratio(gallery.dataset.g15Id));\n  let completed=false;\n  const finish=()=>{\n   if(completed)return;completed=true;\n   card.classList.remove(\"g37-image-pending\");\n   gallery?.style.removeProperty(\"--g37-ratio\");\n   g18ScheduleLayout()\n  };\n  if(img.complete){finish();return}\n  img.addEventListener(\"load\",finish,{once:true});\n  img.addEventListener(\"error\",finish,{once:true})\n })\n}\nfunction g37Activate(seq){\n if(seq!==g37State.sequence)return;\n const grid=document.getElementById(\"products\");\n if(!grid||!grid.isConnected)return;\n g37TrackImages(grid);\n g18ScheduleLayout();\n g37Observe(seq)\n}\nfunction g37Observe(seq){\n if(seq!==g37State.sequence||g37State.count>=g37State.items.length)return;\n const grid=document.getElementById(\"products\"),skeletons=grid?.querySelectorAll(\":scope > .g37-skeleton\");\n if(!skeletons?.length)return;\n const target=skeletons[skeletons.length-1];\n if(!(\"IntersectionObserver\" in window)){g37LoadMore(seq);return}\n const observer=new IntersectionObserver(entries=>{\n  if(entries.some(e=>e.isIntersecting)){observer.disconnect();if(g37State.observer===observer)g37State.observer=null;g37LoadMore(seq)}\n },{root:null,rootMargin:\"450px 0px 650px 0px\",threshold:0});\n g37State.observer=observer;observer.observe(target)\n}\nfunction g37LoadMore(seq){\n if(seq!==g37State.sequence||g37State.loading)return;\n const grid=document.getElementById(\"products\");\n if(!grid||!grid.isConnected||!grid.querySelector(\":scope > .g37-skeleton\"))return;\n g37State.loading=true;\n const start=g37State.count,end=Math.min(start+g37State.batch,g37State.items.length);\n const fragment=document.createElement(\"template\");\n fragment.innerHTML=g37Markup(g37State.items.slice(start,end));\n grid.querySelectorAll(\":scope > .g37-skeleton\").forEach(el=>el.remove());\n grid.appendChild(fragment.content);\n g37State.count=end;\n const remaining=g37State.items.length-end;\n if(remaining){\n  const sk=document.createElement(\"template\");\n  sk.innerHTML=g37SkeletonMarkup(Math.min(4,remaining),end);\n  grid.appendChild(sk.content)\n }\n g37TrackImages(grid);\n g18ScheduleLayout();\n g37State.loading=false;\n g37Observe(seq)\n}\n</script></body></html>";
+const js=x=>new Response(JSON.stringify(x),{headers:{"content-type":"application/json","cache-control":"no-store","x-content-type-options":"nosniff"}});const fail=(s,c=400)=>new Response(JSON.stringify({error:s}),{status:c,headers:{"content-type":"application/json"}});const hashed=async s=>Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s)))).map(n=>n.toString(16).padStart(2,"0")).join("");function v15Images(value,preferred=""){
+ let list=[];
+ if(Array.isArray(value))list=value;
+ else if(typeof value==="string"&&value.trim()){
+  try{const p=JSON.parse(value);list=Array.isArray(p)?p:[value]}
+  catch{list=value.split(/\r?\n/)}
+ }
+ const out=[];
+ for(const entry of [preferred,...list]){
+  const url=String(entry||"").trim();
+  if(!url||url.length>2000||!valid(url)||out.includes(url))continue;
+  out.push(url);if(out.length>=8)break;
+ }
+ return out;
+}
+function g30CompareSafe(raw){if(!raw||typeof raw!=="object"||Array.isArray(raw))return {};const out={};for(const k of ["brand","model","availability","condition","warranty","returns","pros","cons","shipping","tax","other"])out[k]=String(raw[k]??"").trim().slice(0,k==="pros"||k==="cons"?700:180);const seen=new Set();out.specs=[];if(Array.isArray(raw.specs))for(const row of raw.specs.slice(0,24)){if(!row||typeof row!=="object")continue;const name=String(row.name??"").trim().slice(0,65),value=String(row.value??"").trim().slice(0,180);if(!name||!value||seen.has(name.toLowerCase()))continue;seen.add(name.toLowerCase());out.specs.push({name,value})}return out}
+function clean(d){
+ const o={};
+ for(const k of ["title","url","category","price","currency","notes","image","rating","status","collectionId","tags"]){
+  if(d[k]!==undefined)o[k]=String(d[k]||"").slice(0,k==="notes"?600:k==="url"?2000:k==="image"?2000:140);
+ }
+ if(Object.prototype.hasOwnProperty.call(d,"compare"))o.compare=g30CompareSafe(g31JSON(d.compare)); if(Object.prototype.hasOwnProperty.call(d,"priceOrigin"))o.priceOrigin=g31Origin(d.priceOrigin); if(o.image&&!valid(o.image))o.image="";
+ if(Object.prototype.hasOwnProperty.call(d,"images"))o.images=v15Images(d.images,d.image||"");
+ return o;
+}function valid(s){try{return ["http:","https:"].includes(new URL(s).protocol)}catch{return false}}
+
+const AUTH_TTL=2592000;
+const authBytes=n=>crypto.getRandomValues(new Uint8Array(n));
+const authB64=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const authFromB64=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")),c=>c.charCodeAt(0));
+async function authDigest(s){return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s)))).map(x=>x.toString(16).padStart(2,"0")).join("")}
+async function authPw(p,salt){let bits=new TextEncoder().encode(p),saltBytes=authFromB64(salt);for(let i=0;i<6;i++){const key=await crypto.subtle.importKey("raw",bits,"PBKDF2",false,["deriveBits"]);bits=new Uint8Array(await crypto.subtle.deriveBits({name:"PBKDF2",salt:saltBytes,iterations:100000,hash:"SHA-256"},key,256))}return authB64(bits)}
+const publicUser=u=>u?{id:u.id,name:u.name,avatar:u.avatar||"✨",bio:u.bio||"",created:u.created,googleLinked:!!u.googleSub}:null;
+const authCookie=(t,clear=false)=>"gatherly_session="+(clear?"":t)+"; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age="+(clear?"0":AUTH_TTL);
+function authJson(data,cookie){const h=new Headers({"content-type":"application/json","cache-control":"no-store","x-content-type-options":"nosniff"});if(cookie)h.set("set-cookie",cookie);return new Response(JSON.stringify(data),{headers:h})}
+function sessionToken(req){let m=(req.headers.get("cookie")||"").match(/(?:^|;\s*)gatherly_session=([A-Za-z0-9_-]{32,90})(?:;|$)/);return m?.[1]||""}
+async function authLookup(req){const token=sessionToken(req);if(!token)return null;const entry=await GATHERLY_KV.get("sess:"+await authDigest(token),"json");if(!entry?.uid)return null;return await GATHERLY_KV.get("u:"+entry.uid,"json")}
+async function authNewSession(user){const token=authB64(authBytes(32));await GATHERLY_KV.put("sess:"+await authDigest(token),JSON.stringify({uid:user.id}),{expirationTtl:AUTH_TTL});return token}
+
+/* Gatherly V19 — board collaborators available to collection folders */
+async function g19BoardCollaborators(boardId,currentUser){
+ const prefix="bm:"+boardId+":";
+ const entries=await GATHERLY_KV.list({prefix,limit:60});
+ let ids=[...new Set(entries.keys.map(x=>x.name.slice(prefix.length)).filter(x=>/^[0-9a-f-]{36}$/i.test(x)))].slice(0,40);
+ if(currentUser&&/^[0-9a-f-]{36}$/i.test(currentUser.id)&&!ids.includes(currentUser.id))ids.unshift(currentUser.id);
+ const users=await Promise.all(ids.map(id=>GATHERLY_KV.get("u:"+id,"json")));
+ return users.map(publicUser).filter(Boolean).map(u=>({id:u.id,name:u.name,avatar:u.avatar}));
+}
+
+async function authLinkBoard(user,id,key){if(!user)return;await Promise.all([GATHERLY_KV.put("ub:"+user.id+":"+id,JSON.stringify({id,key,linked:Date.now()})),GATHERLY_KV.put("bm:"+id+":"+user.id,JSON.stringify({id:user.id,linked:Date.now()}))]);await g23IndexAdd("ubidx:",user.id,id)}
+
+const googleClientIdKey="auth:google:client_id";
+async function googleConfiguredClientId(){
+ const v=await GATHERLY_KV.get(googleClientIdKey);
+ return v&&/^[0-9]+-[a-zA-Z0-9-]+\.apps\.googleusercontent\.com$/.test(v.trim())?v.trim():null;
+}
+async function googleAuthenticate(req,origin,currentUser){
+ if(req.headers.get("origin")!==origin.origin||!/^application\/json(?:;|$)/i.test(req.headers.get("content-type")||""))return fail("Invalid request origin",403);
+ if(+(req.headers.get("content-length")||0)>16000)return fail("Credential too large",413);
+ const clientId=await googleConfiguredClientId();
+ if(!clientId)return fail("Google sign-in is not configured yet",503);
+ const d=await req.json().catch(()=>({}));
+ const token=String(d.credential||"");
+ if(token.length<100||token.length>12000||!/^[A-Za-z0-9_\-.]+$/.test(token))return fail("Invalid Google credential",400);
+ let response;
+ try{response=await fetch("https://oauth2.googleapis.com/tokeninfo?id_token="+encodeURIComponent(token),{headers:{accept:"application/json"},signal:AbortSignal.timeout(8500)})}catch{return fail("Google verification unavailable, try again",503)}
+ if(!response.ok)return fail("Google could not verify your sign-in",401);
+ const claims=await response.json().catch(()=>({}));
+ const seconds=Math.floor(Date.now()/1000);
+ if(claims.aud!==clientId||!["accounts.google.com","https://accounts.google.com"].includes(claims.iss)||Number(claims.exp)<=seconds||!claims.sub||String(claims.email_verified)!=="true")return fail("Invalid or expired Google sign-in",401);
+ const email=String(claims.email||"").trim().toLowerCase();
+ if(email.length>254||!/^\S+@\S+\.\S+$/.test(email))return fail("Google did not return a verified email address",401);
+ const subject=String(claims.sub);
+ if(subject.length>200||!/^[0-9]+$/.test(subject))return fail("Invalid Google identity",401);
+ const googleKey="gsub:"+subject;
+ const existingId=await GATHERLY_KV.get(googleKey);
+ let registered=existingId?await GATHERLY_KV.get("u:"+existingId,"json"):null;
+ const linking=!!d.link;
+ if(linking){
+  if(!currentUser)return fail("Sign in with email before linking Google",401);
+  if(registered&&registered.id!==currentUser.id)return fail("This Google account is linked to another Gatherly profile",409);
+  if(email!==String(currentUser.email||"").toLowerCase())return fail("Use the Google account with the same email as your Gatherly profile",409);
+  if(currentUser.googleSub&&currentUser.googleSub!==subject)return fail("A different Google account is already linked",409);
+  currentUser.googleSub=subject;currentUser.googleVerified=true;
+  await GATHERLY_KV.put("u:"+currentUser.id,JSON.stringify(currentUser));
+  await GATHERLY_KV.put(googleKey,currentUser.id);
+  return authJson({user:publicUser(currentUser),linked:true});
+ }
+ if(registered){
+  const session=await authNewSession(registered);
+  return authJson({user:publicUser(registered)},authCookie(session));
+ }
+ const emailKey="em:"+await authDigest(email);
+ const existingEmailUser=await GATHERLY_KV.get(emailKey);
+ if(existingEmailUser){
+  return fail("An email/password account already uses this email. Sign in with email, then connect Google in your profile.",409);
+ }
+ const user={id:crypto.randomUUID(),email,name:String(claims.name||email.split("@")[0]||"Gatherly friend").slice(0,60),avatar:"🌟",bio:"",salt:null,passhash:null,googleSub:subject,googleVerified:true,created:Date.now()};
+ await GATHERLY_KV.put("u:"+user.id,JSON.stringify(user));
+ await GATHERLY_KV.put(emailKey,user.id);
+ await GATHERLY_KV.put(googleKey,user.id);
+ const session=await authNewSession(user);
+ return authJson({user:publicUser(user)},authCookie(session));
+}
+
+async function authEndpoint(req,u,p,user){
+ if(p==="/api/auth/providers"&&req.method==="GET"){const clientId=await googleConfiguredClientId();return authJson({emailPassword:true,google:!!clientId,googleClientId:clientId})}
+ if(p==="/api/auth/google"&&req.method==="POST")return googleAuthenticate(req,u,user);
+ if(p==="/api/auth/me"&&req.method==="GET")return authJson({user:publicUser(user)});
+ if(p==="/api/auth/logout"&&req.method==="POST"){const token=sessionToken(req);if(token)await GATHERLY_KV.delete("sess:"+await authDigest(token));return authJson({ok:true},authCookie("",true))}
+ if(p==="/api/auth/profile"&&req.method==="PATCH"){
+  if(!user)return fail("Sign in first",401);
+  const d=await req.json().catch(()=>({})),name=String(d.name||"").trim().slice(0,60);
+  if(name.length<2)return fail("Choose a display name with at least two characters");
+  const avatar=String(d.avatar||"✨").slice(0,180);
+  if(avatar.startsWith("http")&&!avatar.startsWith(u.origin+"/media/"))return fail("Use a Gatherly image upload for your avatar");
+  const bio=String(d.bio||"").slice(0,180);
+  user.name=name;user.avatar=avatar;user.bio=bio;
+  await GATHERLY_KV.put("u:"+user.id,JSON.stringify(user));return authJson({user:publicUser(user)});
+ }
+ if((p==="/api/auth/register"||p==="/api/auth/login")&&req.method==="POST"){
+  if((+(req.headers.get("content-length")||0))>20000)return fail("Request too large",413);
+  const d=await req.json().catch(()=>({})),email=String(d.email||"").trim().toLowerCase(),password=String(d.password||"");
+  if(email.length>254||!/^\S+@\S+\.\S+$/.test(email)||password.length>128)return fail("Invalid email or password");
+  const emailHash=await authDigest(email),emailKey="em:"+emailHash;
+  if(p.endsWith("/register")){
+   const name=String(d.name||"").trim().slice(0,60);
+   if(name.length<2||password.length<12)return fail("Use a name and a password of at least 12 characters");
+   if(await GATHERLY_KV.get(emailKey))return fail("This email already has an account",409);
+   const uid=crypto.randomUUID(),salt=authB64(authBytes(16)),hash=await authPw(password,salt);
+   const newUser={id:uid,email,name,avatar:"✨",bio:"",salt,passhash:hash,created:Date.now()};
+   await GATHERLY_KV.put("u:"+uid,JSON.stringify(newUser));
+   await GATHERLY_KV.put(emailKey,uid);
+   const token=await authNewSession(newUser);
+   return authJson({user:publicUser(newUser)},authCookie(token));
+  }
+  const rateKey="login-rate:"+emailHash;let rate=await GATHERLY_KV.get(rateKey,"json")||{count:0};if(rate.count>=10)return fail("Too many attempts. Try again in 15 minutes.",429);
+  const uid=await GATHERLY_KV.get(emailKey),lookup=uid?await GATHERLY_KV.get("u:"+uid,"json"):null;
+  const match=!!(lookup?.salt&&lookup?.passhash&&await authPw(password,lookup.salt)===lookup.passhash);
+  if(!match){await GATHERLY_KV.put(rateKey,JSON.stringify({count:rate.count+1}),{expirationTtl:900});return fail("Invalid email or password",401)}
+  await GATHERLY_KV.delete(rateKey);
+  const token=await authNewSession(lookup);
+  return authJson({user:publicUser(lookup)},authCookie(token));
+ }
+ if(p==="/api/my/boards"&&req.method==="GET"){
+  if(!user)return fail("Sign in first",401);
+  const records=await GATHERLY_KV.list({prefix:"ub:"+user.id+":",limit:1000});
+  const direct=await GATHERLY_KV.get("ubidx:"+user.id,"json");
+  const ids=[...new Set([...records.keys.map(k=>k.name.slice(("ub:"+user.id+":").length)),...(Array.isArray(direct?.ids)?direct.ids:[])])].filter(id=>/^[a-f0-9-]{36}$/i.test(id)).slice(0,1000);
+  const entries=await Promise.all(ids.map(id=>GATHERLY_KV.get("ub:"+user.id+":"+id,"json")));
+  const boards=await Promise.all(entries.filter(Boolean).map(async entry=>{
+   const board=await GATHERLY_KV.get("b:"+entry.id,"json");
+   return board?{id:entry.id,title:board.title,key:entry.key,linked:entry.linked||0}:null
+  }));
+  return authJson({boards:boards.filter(Boolean).sort((a,b)=>b.linked-a.linked),hasMore:!records.list_complete});
+ }
+ if(p==="/api/my/attach"&&req.method==="POST"){
+  if(!user)return fail("Sign in first",401);
+  const d=await req.json().catch(()=>({})),id=String(d.id||""),key=String(d.key||"");
+  if(!/^[a-f0-9-]{36}$/.test(id)||!key)return fail("Invalid invite link");
+  const board=await GATHERLY_KV.get("b:"+id,"json");
+  if(!board||await hashed(key)!==board.hash)return fail("Invalid invite link",403);
+  await authLinkBoard(user,id,key);return authJson({ok:true,title:board.title});
+ }
+ return fail("Not found",404);
+}
+function mediaKind(bytes){if(bytes.length>=3&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)return"image/jpeg";if(bytes.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v))return"image/png";if(bytes.length>=12&&String.fromCharCode(...bytes.slice(0,4))==="RIFF"&&String.fromCharCode(...bytes.slice(8,12))==="WEBP")return"image/webp";return null}
+async function mediaEndpoint(req,u,user){
+ if(req.method!=="POST")return fail("Method not allowed",405);
+ if(+(req.headers.get("content-length")||0)>3600000)return fail("Image too large",413);
+ let permitted=!!user;
+ if(!permitted){
+  const id=req.headers.get("X-Board-ID")||"",key=req.headers.get("X-Board-Key")||"";
+  if(id&&key){const board=await GATHERLY_KV.get("b:"+id,"json");permitted=!!(board&&await hashed(key)===board.hash)}
+ }
+ if(!permitted)return fail("Sign in or open a shared dreamboard to upload",403);
+ const d=await req.json().catch(()=>({}));
+ const data=String(d.data||"");
+ if(!data||data.length>3100000||!/^[A-Za-z0-9+/=]+$/.test(data))return fail("Image too large or invalid",413);
+ let bytes;try{bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0))}catch{return fail("Invalid image data")}
+ if(bytes.length>2200000||bytes.length<20)return fail("Image must be under 2.2 MB",413);
+ const type=mediaKind(bytes);if(!type)return fail("Supported images: JPEG, PNG or WebP");
+ const id=crypto.randomUUID();
+ await GATHERLY_KV.put("m:"+id,JSON.stringify({type,data,created:Date.now(),u:user?.id||null}));
+ return authJson({url:u.origin+"/media/"+id,type,size:bytes.length});
+}
+async function mediaFetch(req,p){
+ if(req.method!=="GET"&&req.method!=="HEAD")return fail("Method not allowed",405);
+ const id=p.slice(7);if(!/^[a-f0-9-]{36}$/.test(id))return fail("Not found",404);
+ const entry=await GATHERLY_KV.get("m:"+id,"json");if(!entry)return fail("Image not found",404);
+ const bytes=Uint8Array.from(atob(entry.data),c=>c.charCodeAt(0));
+ return new Response(req.method==="HEAD"?null:bytes,{headers:{"content-type":entry.type,"cache-control":"public,max-age=604800,immutable","x-content-type-options":"nosniff","content-disposition":"inline"}});
+}
+
+
+/* Gatherly V8: safe server-side link previews and optional image import */
+function v8ExtractLink(text){
+  let v=String(text||"").trim();
+  let m=v.match(/https?:\/\/[^\s<>"']+/i);
+  return m?m[0].replace(/[.,;)\]}]+$/g,""):v;
+}
+function v8SafeURL(value){
+  try{
+    if(String(value||"").length>2400)return null;
+    let u=new URL(value);
+    if(!["http:","https:"].includes(u.protocol)||u.username||u.password)return null;
+    const h=u.hostname.toLowerCase().replace(/\.$/,"");
+    if(!h.includes(".")||h.length>250||h.includes(":")||/^\d+(?:\.\d+)*$/.test(h)||/^\d+$/.test(h))return null;
+    if(["localhost","metadata.google.internal","169.254.169.254","0.0.0.0"].includes(h)||/\.(?:local|localhost|internal|onion|test|invalid|example)$/.test(h))return null;
+    if(u.port&&u.port!==(u.protocol==="https:"?"443":"80"))return null;
+    return u;
+  }catch{return null}
+}
+async function v8FetchRemote(raw,{image=false}={}){
+ let current=v8SafeURL(raw);
+ if(!current)throw Error("Only public website links can be imported");
+ for(let i=0;i<4;i++){
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),8500);
+  let resp;
+  try{resp=await fetch(current.href,{redirect:"manual",signal:ctrl.signal,headers:{"Accept":image?"image/avif,image/webp,image/png,image/jpeg;q=0.9,*/*;q=0.5":"text/html,application/xhtml+xml;q=0.9,*/*;q=0.2","User-Agent":"Mozilla/5.0 (compatible; GatherlyPreview/1.0; +https://gatherly-compare.regatta-kingdom-mak2026.workers.dev/)","Accept-Language":"en-US,en;q=0.7"}})}finally{clearTimeout(timer)}
+  if([301,302,303,307,308].includes(resp.status)){
+   const location=resp.headers.get("location");if(!location)throw Error("Invalid redirect");
+   const next=v8SafeURL(new URL(location,current).href);
+   if(!next)throw Error("Unsafe redirect blocked");
+   current=next;
+   continue;
+  }
+  if(!resp.ok)throw Error("Source blocked automatic previews ("+resp.status+")");
+  return {resp,url:current};
+ }
+ throw Error("Too many redirects");
+}
+async function v8ReadBounded(resp,max){
+ const size=Number(resp.headers.get("content-length")||0);
+ if(size>max)throw Error("File too large");
+ const reader=resp.body?.getReader();
+ if(!reader)throw Error("Source is empty");
+ let chunks=[],total=0;
+ try{while(true){const {value,done}=await reader.read();if(done)break;total+=value.byteLength;if(total>max)throw Error("Source too large");chunks.push(value)}}finally{reader.cancel().catch(()=>{})}
+ const out=new Uint8Array(total);let pos=0;
+ for(let chunk of chunks){out.set(chunk,pos);pos+=chunk.length}
+ return out;
+}
+function v8Entities(s){
+ return String(s||"").replace(/&(#x[\da-f]+|#\d+|amp|quot|apos|lt|gt|nbsp|rsquo|lsquo|ldquo|rdquo|ndash|mdash);?/gi,(_,e)=>{
+ const dict={amp:"&",quot:'"',apos:"'",lt:"<",gt:">",nbsp:" ",rsquo:"’",lsquo:"‘",ldquo:"“",rdquo:"”",ndash:"–",mdash:"—"};
+ if(e[0]==="#"){const n=e[1].toLowerCase()==="x"?parseInt(e.slice(2),16):parseInt(e.slice(1),10);return Number.isFinite(n)&&n>0&&n<0x110000?String.fromCodePoint(n):""}
+ return dict[e.toLowerCase()]||""
+ }).replace(/\s+/g," ").trim()
+}
+function v8Attrs(tag){
+ const attrs={};
+ const part=tag.replace(/^<\s*\w+\b/i,"").replace(/\/?>$/,"");
+ const re=/([^\s=\/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+ for(const m of part.matchAll(re)){attrs[m[1].toLowerCase()]=v8Entities(m[2]??m[3]??m[4]??"")}
+ return attrs;
+}
+
+/* Gatherly V15 — broaden public link image extraction */
+function v15ExtractImages(html,finalUrl){
+ const found=[];
+ const push=raw=>{
+  if(typeof raw!=="string")return;
+  let src=v8Entities(raw.trim()).replace(/\\\//g,"/");
+  if(!src||src.startsWith("data:")||src.startsWith("blob:"))return;
+  try{
+   const u=v8SafeURL(new URL(src,finalUrl).href);
+   if(!u)return;
+   if(/(?:favicon|sprite|spacer|tracker|pixel|spinner|loader|default-avatar|placeholder|1x1|emoji)\b/i.test(u.pathname))return;
+   if(!found.includes(u.href)&&found.length<16)found.push(u.href);
+  }catch{}
+ };
+ const tags=[];
+ for(const m of html.matchAll(/<meta\b[^>]*>/gi)){
+  const a=v8Attrs(m[0]),key=(a.property||a.name||a.itemprop||"").toLowerCase();
+  if(/^(og:image(?::(?:url|secure_url))?|twitter:image(?::src)?|image|thumbnailurl|thumbnail|parsely-image)$/i.test(key))tags.push(a.content||"");
+ }
+ tags.forEach(push);
+ for(const m of html.matchAll(/<link\b[^>]*>/gi)){
+  const a=v8Attrs(m[0]),rel=String(a.rel||"").toLowerCase();
+  if(rel.split(/\s+/).some(x=>["image_src","image","preload"].includes(x))&&(rel!=="preload"||a.as==="image"))push(a.href);
+ }
+ const addImageVal=(value,depth=0)=>{
+  if(depth>6||!value)return;
+  if(typeof value==="string"){push(value);return}
+  if(Array.isArray(value)){for(const v of value.slice(0,16))addImageVal(v,depth+1);return}
+  if(typeof value==="object"){
+   if(typeof value.url==="string")push(value.url);
+   if(typeof value.contentUrl==="string")push(value.contentUrl);
+   if(typeof value["@id"]==="string"&&/\.(?:png|jpe?g|webp)(?:\?|$)/i.test(value["@id"]))push(value["@id"]);
+  }
+ };
+ const walk=(node,depth=0)=>{
+  if(depth>5||!node)return;
+  if(Array.isArray(node)){for(const n of node.slice(0,20))walk(n,depth+1);return}
+  if(typeof node!=="object")return;
+  if(node.image)addImageVal(node.image,0);
+  if(node.thumbnailUrl)addImageVal(node.thumbnailUrl,0);
+  if(/ImageObject/i.test(String(node["@type"]||"")))addImageVal(node,0);
+  for(const k of ["@graph","mainEntity","hasVariant","variants","itemListElement","subjectOf"])if(node[k])walk(node[k],depth+1);
+ };
+ for(const m of html.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
+  try{walk(JSON.parse(m[1]))}catch{}
+ }
+ let loose=0;
+ for(const m of html.matchAll(/<img\b[^>]*>/gi)){
+  if(loose++>130||found.length>=12)break;
+  const attrs=v8Attrs(m[0]);
+  const hint=[attrs.class,attrs.id,attrs.alt,attrs["data-testid"],attrs["itemprop"]].join(" ").toLowerCase();
+  const width=parseInt(attrs.width||"0",10),height=parseInt(attrs.height||"0",10);
+  if((width>0&&width<180)||(height>0&&height<150))continue;
+  if(/avatar|logo|icon|badge|pixel|emoji|sprite|profile/i.test(hint))continue;
+  if(found.length&& !/product|gallery|slide|photo|detail|main.image|hero|zoom|media/i.test(hint))continue;
+  const src=attrs["data-src"]||attrs["data-original"]||attrs["data-lazy-src"]||attrs.src||"";
+  push(src);
+  if(!src&&attrs.srcset)push(String(attrs.srcset).split(",")[0].trim().split(/\s+/)[0]);
+ }
+ return found.slice(0,8);
+}
+function v8Metadata(html,finalUrl){
+ const tags=new Map();
+ for(const match of html.matchAll(/<meta\b[^>]*>/gi)){
+  const a=v8Attrs(match[0]),k=(a.property||a.name||a.itemprop||"").toLowerCase(),v=a.content||"";
+  if(k&&v&&!tags.has(k))tags.set(k,v);
+ }
+ const grab=(...keys)=>keys.map(k=>tags.get(k)).find(v=>v&&v.trim())||"";
+ let title=grab("og:title","twitter:title","title");
+ if(!title){const m=html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);if(m)title=v8Entities(m[1])}
+ let description=grab("og:description","twitter:description","description");
+ const price=grab("product:price:amount","og:price:amount","product:price","price");
+ const currency=grab("product:price:currency","og:price:currency","pricecurrency");
+ const img=grab("og:image:secure_url","og:image","twitter:image","twitter:image:src","image");
+ let images=v15ExtractImages(html,finalUrl);
+ if(img){try{const u=v8SafeURL(new URL(v8Entities(img),finalUrl).href);if(u)images=v15Images(images,u.href)}catch{}}
+ let image=images[0]||"";
+ let host=new URL(finalUrl).hostname.replace(/^www\./,"");
+ let pathname=new URL(finalUrl).pathname;
+ const fallback=host.includes("facebook.com")||host.includes("fb.watch")?"Facebook discovery":host.includes("instagram.com")?"Instagram discovery":host.includes("pinterest")?"Pinterest find":host.includes("tiktok.com")?"TikTok find":host;
+ if(!title||(/^(facebook|instagram|log in|login|sign up|just a moment|access denied)$/i.test(title.trim())))title=fallback;
+ title=v8Entities(title).slice(0,140);
+ description=v8Entities(description).slice(0,600);
+ return {title,description,image,images,price:String(price||"").slice(0,50),currency:String(currency||"").slice(0,10),source:host,url:finalUrl,fetched:true,mediaType:/^video/i.test(grab("og:type"))?"video":""};
+}
+async function v8Authorize(req,user){
+ const id=req.headers.get("X-Board-ID")||"";
+ if(!/^[a-f0-9-]{36}$/i.test(id))return false;
+ const board=await GATHERLY_KV.get("b:"+id,"json");
+ if(!board)return false;
+ const secret=req.headers.get("X-Board-Key")||"";
+ if(secret&&await hashed(secret)===board.hash)return true;
+ if(user&&await GATHERLY_KV.get("ub:"+user.id+":"+id))return true;
+ return false;
+}
+
+/* Gatherly V15 — stream the beginning of large pages, rather than rejecting them */
+async function v15ReadPreview(resp,max=1000000){
+ const reader=resp.body?.getReader();
+ if(!reader)throw Error("Source is empty");
+ const decoder=new TextDecoder("utf-8");
+ let text="",total=0;
+ try{
+  while(total<max){
+   const {value,done}=await reader.read();
+   if(done)break;
+   if(!value?.length)continue;
+   const bytes=value.subarray(0,Math.min(value.length,max-total));
+   total+=bytes.length;
+   text+=decoder.decode(bytes,{stream:true});
+   if(value.length>bytes.length)break;
+  }
+ }finally{reader.cancel().catch(()=>{})}
+ return text+decoder.decode();
+}
+
+
+/* Gatherly V26 — accurate Facebook previews: never import login-screen images/URLs */
+function g26IsFacebookURL(url){
+ try{const h=new URL(url).hostname.toLowerCase().replace(/\.$/,"");
+ return h==="facebook.com"||h.endsWith(".facebook.com")||["fb.watch","fb.com","www.fb.com","fb.me","www.fb.me"].includes(h);
+ }catch{return false}
+}
+function g26UnwrapFacebookOutbound(input){
+ let u=v8SafeURL(input);
+ if(!u)return input;
+ const host=u.hostname.toLowerCase();
+ if(host==="l.facebook.com"&&/^\/l(?:\.php)?$/i.test(u.pathname)){
+  let dest=u.searchParams.get("u")||u.searchParams.get("url")||"";
+  for(let i=0;i<2&&dest&&!/^https?:\/\//i.test(dest);i++){try{dest=decodeURIComponent(dest)}catch{break}}
+  const candidate=v8SafeURL(dest);
+  if(candidate&&!g26IsFacebookURL(candidate.href))return candidate.href;
+ }
+ return u.href;
+}
+function g26FacebookLoginScreen(html,finalUrl){
+ try{
+  const page=new URL(finalUrl);
+  if(g26IsFacebookURL(page.href)&&/^\/(?:login|login\.php|checkpoint|recove

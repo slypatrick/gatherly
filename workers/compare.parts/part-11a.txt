@@ -1,0 +1,453 @@
+pe.hasOwnProperty.call(data,"unitPrice")){
+  const n=g20CartPrice(data.unitPrice);
+  if(data.unitPrice!==""&&data.unitPrice!==null&&n===null)return fail("Enter a valid unit price",400);
+  next.unitPrice=n;
+ }
+ if(Object.prototype.hasOwnProperty.call(data,"currency"))next.currency=g20CartCurrency(data.currency);
+ if(Object.prototype.hasOwnProperty.call(data,"note"))next.note=String(data.note||"").slice(0,400);
+ if(Object.prototype.hasOwnProperty.call(data,"bought")){
+  next.bought=!!data.bought;
+  next.boughtAt=next.bought?(previous.boughtAt||Date.now()):null;
+ }
+ next.updatedAt=Date.now();
+ await GATHERLY_KV.put(key,JSON.stringify(next));
+ if(next.bought!==previous.bought){
+  const [activityBoard,product]=await Promise.all([GATHERLY_KV.get("b:"+boardId,"json"),GATHERLY_KV.get("i:"+boardId+":"+itemId,"json")]);
+  if(activityBoard)await g25BoardActivity(boardId,activityBoard,{type:next.bought?"cart_purchased":"cart_reopened",itemId,itemTitle:product?.title||previous.title,collectionId:product?.collectionId||"default"},user);
+ }
+ return js({success:true,item:next});
+}
+
+async function proCommunity(req,arr,boardId,user){
+ if(arr.length<5||!/^[0-9a-f-]{36}$/i.test(arr[4]))return fail("Invalid item",400);
+ const itemId=arr[4],item=await GATHERLY_KV.get("i:"+boardId+":"+itemId,"json");
+ if(!item)return fail("Discovery not found",404);
+ const votePrefix="v:"+boardId+":"+itemId+":";
+ const commentPrefix="c:"+boardId+":"+itemId+":";
+ if(arr.length===5&&req.method==="GET"){
+  const [voteKeys,commentKeys]=await Promise.all([GATHERLY_KV.list({prefix:votePrefix,limit:1000}),GATHERLY_KV.list({prefix:commentPrefix,limit:100})]);
+  const [votes,comments]=await Promise.all([
+    Promise.all(voteKeys.keys.map(k=>GATHERLY_KV.get(k.name,"json"))),
+    Promise.all(commentKeys.keys.map(k=>GATHERLY_KV.get(k.name,"json")))
+  ]);
+  const allVotes=votes.filter(Boolean);
+  const allComments=comments.filter(Boolean).sort((a,b)=>a.created-b.created);
+  return authJson({votes:{likes:allVotes.filter(v=>v.value===1).length,dislikes:allVotes.filter(v=>v.value===-1).length,mine:allVotes.find(v=>v.userId===user?.id)?.value||0},comments:allComments.map(c=>({id:c.id,text:c.text,userId:c.userId,name:c.name,avatar:c.avatar,created:c.created})),hasMore:!voteKeys.list_complete||!commentKeys.list_complete});
+ }
+ if(!user)return fail("Sign in to vote or comment",401);
+ if(arr[5]==="vote"&&req.method==="POST"){
+  const data=await req.json().catch(()=>({}));
+  if(![-1,0,1].includes(data.value))return fail("Invalid vote",400);
+  const key=votePrefix+user.id;
+  if(data.value===0)await GATHERLY_KV.delete(key);
+  else await GATHERLY_KV.put(key,JSON.stringify({userId:user.id,value:data.value,at:Date.now()}));
+  return authJson({ok:true,value:data.value});
+ }
+ if(arr[5]==="comments"&&arr.length===6&&req.method==="POST"){
+  if(Number(req.headers.get("content-length")||0)>2000)return fail("Comment too long",413);
+  const data=await req.json().catch(()=>({}));
+  const text=String(data.text||"").trim().slice(0,400);
+  if(!text||text.length>400)return fail("Write a comment",400);
+  const id=crypto.randomUUID();
+  const comment={id,text,userId:user.id,name:user.name,avatar:user.avatar||"✨",created:Date.now()};
+  await GATHERLY_KV.put(commentPrefix+id,JSON.stringify(comment));
+  const activityBoard=await GATHERLY_KV.get("b:"+boardId,"json");
+  if(activityBoard)await g25BoardActivity(boardId,activityBoard,{type:"comment_added",itemId,itemTitle:item.title,collectionId:item.collectionId||"default"},user);
+  return authJson({comment});
+ }
+ if(arr[5]==="comments"&&arr[6]&&req.method==="DELETE"){
+  if(!/^[0-9a-f-]{36}$/i.test(arr[6]))return fail("Invalid comment id",400);
+  const key=commentPrefix+arr[6];
+  const old=await GATHERLY_KV.get(key,"json");
+  if(!old)return fail("Comment not found",404);
+  if(old.userId!==user.id)return fail("Only the author can remove a comment",403);
+  await GATHERLY_KV.delete(key);
+  return authJson({ok:true});
+ }
+ return fail("Method not allowed",405);
+}
+
+
+/* Gatherly V23 — reciprocal friends and consent-based shared-board invitations */
+
+/* Fast account indexes complement KV prefix listings after an invite is accepted. */
+async function g23IndexAdd(prefix,uid,value){
+ const key=prefix+uid;
+ const index=await GATHERLY_KV.get(key,"json");
+ const ids=Array.isArray(index?.ids)?index.ids:[];
+ if(!ids.includes(value))await GATHERLY_KV.put(key,JSON.stringify({ids:[...ids,value].slice(-250),updated:Date.now()}));
+}
+async function g23IndexRemove(prefix,uid,value){
+ const key=prefix+uid;
+ const index=await GATHERLY_KV.get(key,"json");
+ if(Array.isArray(index?.ids))await GATHERLY_KV.put(key,JSON.stringify({ids:index.ids.filter(id=>id!==value),updated:Date.now()}));
+}
+
+const G23_INVITE_TTL=604800;
+const G23_UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function g23LinkedBoards(uid){
+ const result=await GATHERLY_KV.list({prefix:"ub:"+uid+":",limit:250});
+ const direct=await GATHERLY_KV.get("ubidx:"+uid,"json");
+ const ids=[...new Set([...result.keys.map(x=>x.name.slice(("ub:"+uid+":").length)),...(Array.isArray(direct?.ids)?direct.ids:[])])].filter(id=>G23_UUID.test(id)).slice(0,250);
+ const data=await Promise.all(ids.map(id=>GATHERLY_KV.get("ub:"+uid+":"+id,"json")));
+ return data.filter(b=>b&&G23_UUID.test(b.id)&&b.key);
+}
+async function g23FriendRecords(uid){
+ const listing=await GATHERLY_KV.list({prefix:"fr:"+uid+":",limit:250});
+ const direct=await GATHERLY_KV.get("friendidx:"+uid,"json");
+ const ids=[...new Set([...listing.keys.map(k=>k.name.slice(("fr:"+uid+":").length)),...(Array.isArray(direct?.ids)?direct.ids:[])])].filter(id=>G23_UUID.test(id)).slice(0,250);
+ const found=await Promise.all(ids.map(async id=>{
+  const k={name:"fr:"+uid+":"+id};
+  if(!G23_UUID.test(id))return null;
+  const [relation,opposite,person]=await Promise.all([
+   GATHERLY_KV.get(k.name,"json"),
+   GATHERLY_KV.get("fr:"+id+":"+uid,"json"),
+   GATHERLY_KV.get("u:"+id,"json")
+  ]);
+  return relation&&opposite&&person?{...publicUser(person),friendsSince:relation.at||0}:null;
+ }));
+ return found.filter(Boolean);
+}
+async function g23FriendSharedBoards(me,other){
+ const [mine,theirs]=await Promise.all([g23LinkedBoards(me),g23LinkedBoards(other)]);
+ const links=new Map(theirs.map(x=>[x.id,x]));
+ const ids=mine.filter(x=>links.has(x.id)).slice(0,45);
+ const results=await Promise.all(ids.map(async link=>{
+  const board=await GATHERLY_KV.get("b:"+link.id,"json");
+  if(!board)return null;
+  const cols=Array.isArray(board.collections)&&board.collections.length?board.collections:[{id:"default",name:board.title||"Wishlist",icon:"folder",color:"#bda2f7"}];
+  const itemList=await GATHERLY_KV.list({prefix:"i:"+link.id+":",limit:1000});
+  const items=(await Promise.all(itemList.keys.map(k=>GATHERLY_KV.get(k.name,"json")))).filter(Boolean);
+  return {id:link.id,title:board.title||"Shared board",collections:cols.map(c=>({id:c.id,name:c.name,icon:c.icon||"folder",color:c.color||"#bda2f7",count:items.filter(x=>(x.collectionId||"default")===c.id).length})),items:items.length};
+ }));
+ return results.filter(Boolean);
+}
+
+/* Gatherly V24: collection-level collaborator rosters, invitation inbox */
+function g24ColExists(board,id){
+ return id==="default"||Array.isArray(board?.collections)&&board.collections.some(c=>c.id===id);
+}
+function g24CollectionInfo(board,id){
+ return (Array.isArray(board?.collections)?board.collections:[]).find(c=>c.id===id)||
+ (id==="default"?{id:"default",name:board.title||"Wishlist",icon:"folder",color:"#bda2f7"}:null);
+}
+async function g24MarkMember(boardId,collectionId,userId){
+ if(!G23_UUID.test(boardId)||!(collectionId==="default"||G23_UUID.test(collectionId))||!G23_UUID.test(userId))return;
+ const key="cm:"+boardId+":"+collectionId+":"+userId;
+ await GATHERLY_KV.put(key,JSON.stringify({userId,boardId,collectionId,joined:Date.now()}));
+ await g23IndexAdd("cmidx:"+boardId+":",collectionId,userId);
+}
+async function g24CollectionPeople(boardId,cols){
+ const members={};
+ await Promise.all(cols.slice(0,100).map(async col=>{
+  const key="cmidx:"+boardId+":"+col.id;
+  const index=await GATHERLY_KV.get(key,"json");
+  const ids=[...new Set(Array.isArray(index?.ids)?index.ids:[])].filter(id=>G23_UUID.test(id)).slice(0,80);
+  const confirmed=(await Promise.all(ids.map(async id=>{
+   const entry=await GATHERLY_KV.get("cm:"+boardId+":"+col.id+":"+id,"json");
+   if(!entry)return null;
+   const person=await GATHERLY_KV.get("u:"+id,"json");
+   return person?{id:person.id,name:person.name,avatar:person.avatar||"✨"}:null;
+  }))).filter(Boolean);
+  members[col.id]=confirmed;
+ }));
+ return members;
+}
+async function g24PendingInvitations(uid){
+ const ix=await GATHERLY_KV.get("inviteidx:"+uid,"json");
+ const tokens=[...new Set(Array.isArray(ix?.ids)?ix.ids:[])].filter(id=>G23_UUID.test(id)).slice(-100).reverse();
+ const invites=(await Promise.all(tokens.map(async token=>{
+  const inv=await GATHERLY_KV.get("friendinv:"+token,"json");
+  if(!inv||inv.toFriendId!==uid||inv.acceptedBy||inv.declinedBy||inv.expires<Date.now())return null;
+  const [from,board]=await Promise.all([GATHERLY_KV.get("u:"+inv.from,"json"),GATHERLY_KV.get("b:"+inv.boardId,"json")]);
+  if(!from||!board||!g24ColExists(board,inv.collectionId))return null;
+  const col=g24CollectionInfo(board,inv.collectionId);
+  return {token,from:publicUser(from),board:{id:inv.boardId,title:board.title},collection:col?{id:col.id,name:col.name,icon:col.icon||"folder"}:null,expires:inv.expires};
+ }))).filter(Boolean);
+ return invites.slice(0,30);
+}
+
+
+/* Gatherly V25 — account-scoped notifications, unread state, and board activity */
+const G25_ID=/^[a-f0-9-]{36}$/i;
+async function g25SendTo(uid,event){
+ if(!G25_ID.test(uid)||!event||!event.type)return;
+ const id=crypto.randomUUID(),created=Date.now();
+ const notification={id,type:String(event.type).slice(0,42),created,actorId:G25_ID.test(event.actorId||"")?event.actorId:null,actorName:String(event.actorName||"Someone").slice(0,60),actorAvatar:String(event.actorAvatar||"").slice(0,180),boardId:G25_ID.test(event.boardId||"")?event.boardId:null,boardTitle:String(event.boardTitle||"").slice(0,75),collectionId:String(event.collectionId||"").slice(0,80),collectionName:String(event.collectionName||"").slice(0,60),itemId:G25_ID.test(event.itemId||"")?event.itemId:null,itemTitle:String(event.itemTitle||"").slice(0,110),inviteId:G25_ID.test(event.inviteId||"")?event.inviteId:null};
+ try{
+  await GATHERLY_KV.put("note:"+uid+":"+id,JSON.stringify(notification),{expirationTtl:5184000});
+  const idxKey="noteidx:"+uid;
+  const current=await GATHERLY_KV.get(idxKey,"json");
+  const ids=Array.isArray(current?.ids)?current.ids:[];
+  await GATHERLY_KV.put(idxKey,JSON.stringify({ids:[id,...ids.filter(x=>x!==id)].slice(0,160)}));
+ }catch(error){console.warn("Gatherly notification:",error)}
+}
+async function g25BoardActivity(boardId,board,event,actor){
+ try{
+  const people=await g19BoardCollaborators(boardId,actor);
+  const recipients=people.filter(p=>p.id!==actor?.id).slice(0,50);
+  if(!recipients.length)return;
+  const col=(Array.isArray(board.collections)?board.collections:[]).find(x=>x.id===event.collectionId);
+  const evt={...event,boardId,boardTitle:board.title||"Shared board",collectionName:col?.name||event.collectionName||"",actorId:actor?.id||"",actorName:actor?.name||"Guest",actorAvatar:actor?.avatar||""};
+  await Promise.allSettled(recipients.map(p=>g25SendTo(p.id,evt)));
+ }catch(error){console.warn("Gatherly shared activity:",error)}
+}
+async function g25Notifications(req,p,user){
+ if(!user)return fail("Sign in to view notifications",401);
+ if(p==="/api/social/notifications"&&req.method==="GET"){
+  const idx=await GATHERLY_KV.get("noteidx:"+user.id,"json");
+  const listing=await GATHERLY_KV.list({prefix:"note:"+user.id+":",limit:160});
+  const listed=listing.keys.map(k=>k.name.slice(("note:"+user.id+":").length));
+  const ids=[...new Set([...(Array.isArray(idx?.ids)?idx.ids:[]),...listed])].filter(x=>G25_ID.test(x)).slice(0,180);
+  const seenAll=Number(await GATHERLY_KV.get("noteseen:"+user.id)||0);
+  const docs=(await Promise.all(ids.map(async id=>{
+   const [notification,flag]=await Promise.all([
+    GATHERLY_KV.get("note:"+user.id+":"+id,"json"),
+    GATHERLY_KV.get("noteread:"+user.id+":"+id)
+   ]);
+   return notification?{...notification,read:!!flag||notification.created<=seenAll}:null;
+  }))).filter(Boolean).sort((a,b)=>b.created-a.created).slice(0,80);
+  return authJson({notifications:docs,unread:docs.filter(x=>!x.read).length,hasMore:docs.length>=80});
+ }
+ if(p==="/api/social/notifications/read"&&req.method==="POST"){
+  if(Number(req.headers.get("content-length")||0)>1024)return fail("Invalid notification request",413);
+  const d=await req.json().catch(()=>({}));
+  if(d.all===true){await GATHERLY_KV.put("noteseen:"+user.id,String(Date.now()));return authJson({success:true,all:true})}
+  const id=String(d.id||"");
+  if(!G25_ID.test(id))return fail("Invalid notification",400);
+  const note=await GATHERLY_KV.get("note:"+user.id+":"+id,"json");
+  if(!note)return fail("Notification not found",404);
+  await GATHERLY_KV.put("noteread:"+user.id+":"+id,"1",{expirationTtl:5184000});
+  return authJson({success:true,id});
+ }
+ return fail("Not found",404);
+}
+
+async function g23Social(req,u,p,user){
+ const segments=p.split("/").filter(Boolean);
+ const method=req.method;
+ if(p==="/api/social/friends"&&method==="GET"){
+  if(!user)return fail("Sign in to see your friends",401);
+  const friends=await g23FriendRecords(user.id);
+  return authJson({friends:friends.sort((a,b)=>(a.name||"").localeCompare(b.name||""))});
+ }
+
+ if(p==="/api/social/invites/inbox"&&method==="GET"){
+  if(!user)return fail("Sign in to view invitations",401);
+  return authJson({invitations:await g24PendingInvitations(user.id)});
+ }
+ if(segments[2]==="collections"&&G23_UUID.test(segments[3]||"")&&segments.length===4&&method==="GET"){
+  if(!user)return fail("Sign in to view collection collaborators",401);
+  const boardId=segments[3];
+  if(!await GATHERLY_KV.get("ub:"+user.id+":"+boardId,"json"))return fail("Not a member of this board",403);
+  const board=await GATHERLY_KV.get("b:"+boardId,"json");
+  if(!board)return fail("Board not found",404);
+  const cols=Array.isArray(board.collections)&&board.collections.length?board.collections:[g24CollectionInfo(board,"default")];
+  return authJson({boardId,members:await g24CollectionPeople(boardId,cols)});
+ }
+ if(p==="/api/social/invites"&&method==="POST"){
+  if(!user)return fail("Sign in before inviting a friend",401);
+  if(Number(req.headers.get("content-length")||0)>2500)return fail("Invite too large",413);
+  const d=await req.json().catch(()=>({}));
+  const boardId=String(d.boardId||"");
+  if(!G23_UUID.test(boardId))return fail("Choose a valid shared board",400);
+  const board=await GATHERLY_KV.get("b:"+boardId,"json");
+  if(!board)return fail("Shared board not found",404);
+  const membership=await GATHERLY_KV.get("ub:"+user.id+":"+boardId,"json");
+  const candidate=String(membership?.key||d.key||"");
+  if(!candidate||await hashed(candidate)!==board.hash)return fail("You need access to this board to invite a friend",403);
+  if(!membership)await authLinkBoard(user,boardId,candidate);
+
+  const collectionId=String(d.collectionId||"");
+  if(collectionId&&!g24ColExists(board,collectionId))return fail("Collection not found",404);
+  const col=collectionId?g24CollectionInfo(board,collectionId):null;
+  const recipientEmail=String(d.recipientEmail||"").trim().toLowerCase();
+  let targetId=String(d.friendId||"");
+  if(recipientEmail){
+   if(targetId)return fail("Choose a friend or an email, not both",400);
+   if(recipientEmail.length>254||!/^\S+@\S+\.\S+$/.test(recipientEmail))return fail("Enter a valid email address",400);
+   const rate=await GATHERLY_KV.get("invite-limit:"+user.id,"json");
+   if((rate?.count||0)>=40)return fail("Too many invitations. Try again later.",429);
+   const targetUserId=await GATHERLY_KV.get("em:"+await authDigest(recipientEmail));
+   if(!targetUserId)return fail("That email doesn't have a Gatherly account yet. Ask them to sign up first.",404);
+   targetId=String(targetUserId);
+  }
+  if(targetId){
+
+   if(!G23_UUID.test(targetId)||targetId===user.id)return fail("Choose a valid friend",400);
+   const [a,b,person]=await Promise.all([
+    GATHERLY_KV.get("fr:"+user.id+":"+targetId,"json"),
+    GATHERLY_KV.get("fr:"+targetId+":"+user.id,"json"),
+    GATHERLY_KV.get("u:"+targetId,"json")
+   ]);
+   if(!person||(!recipientEmail&&(!a||!b)))return fail("This Gatherly account is not available for invitations",403);
+  }
+  const rateKey="invite-limit:"+user.id;
+  const recent=await GATHERLY_KV.get(rateKey,"json");
+  if((recent?.count||0)>=40)return fail("Too many invitations. Try again later.",429);
+  await GATHERLY_KV.put(rateKey,JSON.stringify({count:(recent?.count||0)+1}),{expirationTtl:3600});
+  const token=crypto.randomUUID();
+  const now=Date.now();
+  const invite={from:user.id,boardId,boardKey:candidate,collectionId:collectionId||null,toFriendId:targetId||null,created:now,expires:now+G23_INVITE_TTL*1000};
+  await GATHERLY_KV.put("friendinv:"+token,JSON.stringify(invite),{expirationTtl:G23_INVITE_TTL});
+  if(targetId){
+   await g23IndexAdd("inviteidx:",targetId,token);
+   await g25SendTo(targetId,{type:"invitation",actorId:user.id,actorName:user.name,actorAvatar:user.avatar||"",boardId,boardTitle:board.title,collectionId:collectionId||"",collectionName:col?.name||"",inviteId:token});
+  }
+  if(collectionId)await g24MarkMember(boardId,collectionId,user.id);
+  return authJson({url:u.origin+"/?friendInvite="+encodeURIComponent(token),expires:invite.expires,board:{id:boardId,title:board.title},collection:col?{id:col.id,name:col.name,icon:col.icon||"folder"}:null,inviteId:token,targeted:!!targetId});
+
+ }
+ if(segments[2]==="invites"&&G23_UUID.test(segments[3]||"")){
+  const token=segments[3],invite=await GATHERLY_KV.get("friendinv:"+token,"json");
+  if(!invite||invite.expires<Date.now()||invite.declinedBy)return fail("This invitation expired or was already used",410);
+  const [from,board]=await Promise.all([GATHERLY_KV.get("u:"+invite.from,"json"),GATHERLY_KV.get("b:"+invite.boardId,"json")]);
+  if(!from||!board)return fail("Invitation is no longer valid",410);
+
+  if(invite.toFriendId&&user&&user.id!==invite.toFriendId)return fail("This invitation is for a different account",403);
+  const inviteCol=invite.collectionId?g24CollectionInfo(board,invite.collectionId):null;
+  if(invite.collectionId&&!inviteCol)return fail("This collection no longer exists",410);
+  if(method==="GET"&&segments.length===4)return authJson({inviter:publicUser(from),board:{id:invite.boardId,title:board.title},collection:inviteCol?{id:inviteCol.id,name:inviteCol.name,icon:inviteCol.icon||"folder"}:null,expires:invite.expires,accepted:!!invite.acceptedBy,alreadyAccepted:invite.acceptedBy===user?.id});
+  if(method==="DELETE"&&segments.length===4){
+   if(!user||user.id!==invite.toFriendId)return fail("Only the invited friend can decline",403);
+   invite.declinedBy=user.id;
+   await GATHERLY_KV.put("friendinv:"+token,JSON.stringify(invite),{expirationTtl:Math.max(60,Math.ceil((invite.expires-Date.now())/1000))});
+   await g23IndexRemove("inviteidx:",user.id,token);
+   await g25SendTo(invite.from,{type:"invitation_declined",actorId:user.id,actorName:user.name,actorAvatar:user.avatar||"",boardId:invite.boardId,boardTitle:board.title,collectionId:invite.collectionId||"",collectionName:inviteCol?.name||"",inviteId:token});
+   return authJson({success:true});
+  }
+  if(method==="POST"&&segments[4]==="accept"&&segments.length===5){
+   if(!user)return fail("Sign in to accept the invitation",401);
+   if(user.id===from.id)return fail("You cannot add yourself as a friend",400);
+   if(invite.toFriendId&&invite.toFriendId!==user.id)return fail("This invitation is for a different account",403);
+   if(invite.acceptedBy&&invite.acceptedBy!==user.id)return fail("This invitation has already been accepted",409);
+   if(await hashed(invite.boardKey)!==board.hash)return fail("Board access for this invitation has changed",403);
+   await authLinkBoard(user,invite.boardId,invite.boardKey);
+   const now=Date.now();
+   await Promise.all([
+    GATHERLY_KV.put("fr:"+from.id+":"+user.id,JSON.stringify({peer:user.id,at:now,boardId:invite.boardId})),
+    GATHERLY_KV.put("fr:"+user.id+":"+from.id,JSON.stringify({peer:from.id,at:now,boardId:invite.boardId}))
+   ]);
+
+   await Promise.all([g23IndexAdd("friendidx:",from.id,user.id),g23IndexAdd("friendidx:",user.id,from.id)]);
+   if(invite.collectionId)await Promise.all([g24MarkMember(invite.boardId,invite.collectionId,from.id),g24MarkMember(invite.boardId,invite.collectionId,user.id)]);
+   if(invite.toFriendId)await g23IndexRemove("inviteidx:",user.id,token);
+   invite.acceptedBy=user.id;
+   await GATHERLY_KV.put("friendinv:"+token,JSON.stringify(invite),{expirationTtl:Math.max(60,Math.ceil((invite.expires-Date.now())/1000))});
+   await g25SendTo(from.id,{type:"invitation_accepted",actorId:user.id,actorName:user.name,actorAvatar:user.avatar||"",boardId:invite.boardId,boardTitle:board.title,collectionId:invite.collectionId||"",collectionName:inviteCol?.name||"",inviteId:token});
+   return authJson({success:true,friend:publicUser(from),board:{id:invite.boardId,title:board.title,key:invite.boardKey},collectionId:invite.collectionId||null});
+  }
+  return fail("Unsupported invitation action",405);
+ }
+ if(segments[2]==="friends"&&G23_UUID.test(segments[3]||"")&&segments.length===4){
+  if(!user)return fail("Sign in first",401);
+  const friendId=segments[3];
+  if(user.id===friendId)return fail("Open your own profile instead",400);
+  const [a,b,other]=await Promise.all([
+   GATHERLY_KV.get("fr:"+user.id+":"+friendId,"json"),
+   GATHERLY_KV.get("fr:"+friendId+":"+user.id,"json"),
+   GATHERLY_KV.get("u:"+friendId,"json")
+  ]);
+  if(!a||!b||!other)return fail("This profile is only available to friends",403);
+  if(method==="GET"){
+   const boards=await g23FriendSharedBoards(user.id,friendId);
+   return authJson({user:publicUser(other),boards,sharedCollections:boards.reduce((n,b)=>n+b.collections.length,0)});
+  }
+  if(method==="DELETE"){
+   await Promise.all([GATHERLY_KV.delete("fr:"+user.id+":"+friendId),GATHERLY_KV.delete("fr:"+friendId+":"+user.id)]);
+   await Promise.all([g23IndexRemove("friendidx:",user.id,friendId),g23IndexRemove("friendidx:",friendId,user.id)]);
+   return authJson({success:true,boardAccessUnchanged:true});
+  }
+  return fail("Method not allowed",405);
+ }
+ if(segments[2]==="people"&&G23_UUID.test(segments[3]||"")&&method==="GET"&&segments.length===4){
+  if(!user)return fail("Sign in first",401);
+  if(!await GATHERLY_KV.get("ub:"+user.id+":"+segments[3],"json"))return fail("Join this board to see its collaborators",403);
+  const collaborators=await g19BoardCollaborators(segments[3],user);
+  const friends=await g23FriendRecords(user.id);
+  const ids=new Set(friends.map(f=>f.id));
+  return authJson({people:collaborators.filter(x=>x.id!==user.id).map(x=>({...x,isFriend:ids.has(x.id)}))});
+ }
+ return fail("Not found",404);
+}
+
+
+/* Gatherly V32 — authorized cross-board batch health repair */
+async function g32BatchHealth(req,user){
+ if(req.method!=="POST")return fail("Method not allowed",405);
+ if(!user)return fail("Sign in to repair linked boards",401);
+ if(Number(req.headers.get("content-length")||0)>3000)return fail("Request too large",413);
+ const input=await req.json().catch(()=>({}));
+ const targets=Array.isArray(input.items)?input.items:[];
+ if(!targets.length||targets.length>2)return fail("Send one or two discoveries per request",400);
+ const requested=Array.isArray(input.fields)?input.fields:["price","image","details","description"];
+ const allowed=new Set(["price","image","details","description"]);
+ const fields=new Set(requested.filter(x=>allowed.has(x)));
+ if(!fields.size)return fail("Select a field to improve",400);
+ const rateKey="health:rate:"+user.id+":"+Math.floor(Date.now()/900000);
+ const used=Number(await GATHERLY_KV.get(rateKey)||0);
+ if(used+targets.length>80)return fail("Batch limit reached. Try again after the 15-minute window.",429);
+ await GATHERLY_KV.put(rateKey,String(used+targets.length),{expirationTtl:960});
+ const out=[];
+ for(const entry of targets){
+  const boardId=String(entry?.boardId||""),itemId=String(entry?.itemId||"");
+  if(!G23_UUID.test(boardId)||!G23_UUID.test(itemId)){out.push({boardId,itemId,status:"invalid"});continue}
+  const member=await GATHERLY_KV.get("ub:"+user.id+":"+boardId,"json");
+  if(!member){out.push({boardId,itemId,status:"forbidden"});continue}
+  const key="i:"+boardId+":"+itemId,old=await GATHERLY_KV.get(key,"json");
+  if(!old){out.push({boardId,itemId,status:"missing"});continue}
+  if(!v8SafeURL(old.url)){out.push({boardId,itemId,status:"no_source"});continue}
+  let metadata;
+  try{metadata=await g31Preview(await g26PublicPreview(old.url))}
+  catch(error){out.push({boardId,itemId,status:"blocked",message:String(error.message||"Fetch failed").slice(0,100)});continue}
+  if(!metadata?.fetched){out.push({boardId,itemId,status:"blocked",message:metadata?.notice||"Source did not provide public details"});continue}
+  const item={...old},changes=[];
+  const present=x=>String(x??"").trim().length>0;
+  if(fields.has("price")&&!present(old.price)&&metadata.priceStatus==="found"&&present(metadata.price)&&metadata.currency==="TND"){
+   item.price=metadata.price;item.currency="TND";
+   if(metadata.priceOrigin)item.priceOrigin=g31Origin(metadata.priceOrigin);
+   const hist=proHistoryEntry(item);if(hist)item.priceHistory=[...(Array.isArray(old.priceHistory)?old.priceHistory:[]),hist].slice(-40);
+   changes.push("price")
+  }
+  if(fields.has("image")&&!present(old.image)&&present(metadata.image)&&v8SafeURL(metadata.image)){
+   item.image=metadata.image;
+   item.images=v15Images([metadata.image,...(Array.isArray(old.images)?old.images:[])],metadata.image);
+   changes.push("image")
+  }
+  if(fields.has("description")&&!present(old.notes)&&present(metadata.description)){
+   item.notes=String(metadata.description).slice(0,600);changes.push("description")
+  }
+  if(fields.has("details")&&metadata.structuredCompare){
+   const base=old.compare&&typeof old.compare==="object"?old.compare:{};
+   const next={...base},from=metadata.structuredCompare;
+   for(const k of ["brand","model","availability","condition"]){
+    if(!present(next[k])&&present(from[k])){next[k]=String(from[k]).slice(0,180);changes.push(k)}
+   }
+   const specs=Array.isArray(next.specs)?[...next.specs]:[],existing=new Set(specs.map(x=>String(x.name||"").trim().toLowerCase()));
+   for(const sp of Array.isArray(from.specs)?from.specs:[]){
+    const name=String(sp.name||"").trim(),value=String(sp.value||"").trim();
+    if(name&&value&&!existing.has(name.toLowerCase())&&specs.length<24){
+     specs.push({name:name.slice(0,65),value:value.slice(0,180)});existing.add(name.toLowerCase());changes.push("specification")
+    }
+   }
+   if(changes.some(x=>["brand","model","availability","condition","specification"].includes(x)))item.compare=g30CompareSafe({...next,specs})
+  }
+  if(changes.length){
+   await GATHERLY_KV.put(key,JSON.stringify(item));
+   const board=await GATHERLY_KV.get("b:"+boardId,"json");
+   if(board)await g25BoardActivity(boardId,board,{type:"item_updated",itemId,itemTitle:item.title,collectionId:item.collectionId||"default"},user);
+  }
+  out.push({boardId,itemId,status:changes.length?"updated":"unchanged",changed:[...new Set(changes)],price:changes.includes("price")?item.price:undefined,currency:changes.includes("price")?"TND":undefined})
+ }
+ return authJson({results:out});
+}
+
+
+
+/* Gatherly V35 scheduled price-watch checks — in-app notifications only */
+async function g35ScheduledCheck(){
+ const listing=await GATHERLY_KV.list({prefix:"g35watchindex:",limit:1000});
+ const keys=listing.keys.map(x=>x.name);
+ if(!keys.length)return;
+ const position=Number(await GATHERLY_KV.get("g35watchcursor")||0)||0;
+ const selected=Array.from({length:M

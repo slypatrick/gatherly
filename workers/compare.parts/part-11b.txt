@@ -1,0 +1,228 @@
+ath.min(6,keys.length)},(_,i)=>keys[(position+i)%keys.length]);
+ await GATHERLY_KV.put("g35watchcursor",String((position+selected.length)%keys.length));
+ let attempts=0;
+ for(const name of selected){
+  const info=await GATHERLY_KV.get(name,"json");
+  if(!info?.boardId||!info?.userId||!g35id(info.boardId)||!g35id(info.userId))continue;
+  const key="watch:"+info.boardId+":"+info.userId,alerts=await GATHERLY_KV.get(key,"json")||{};
+  let dirty=false;
+  for(const [itemId,watch] of Object.entries(alerts).slice(0,4)){
+   if(attempts++>=24)break;
+   const item=await GATHERLY_KV.get("i:"+info.boardId+":"+itemId,"json");
+   if(!item||!valid(item.url)||item.status==="purchased")continue;
+   try{
+    const current=await g31Preview(await g26PublicPreview(item.url));
+    const price=current.priceStatus==="found"?g31Number(current.price,"TND"):null;
+    if(price===null)continue;
+    const prev=Number.isFinite(Number(watch.lastPrice))?Number(watch.lastPrice):null;
+    const target=Number(watch.target);
+    const crossed=Number.isFinite(target)&&price<=target&&(prev===null||prev>target)&&(!watch.lastNotice||prev>target);
+    watch.lastPrice=price;watch.lastChecked=Date.now();dirty=true;
+    if(crossed){
+     watch.lastNotice=Date.now();
+     await g25SendTo(info.userId,{type:"price_target",actorName:"Gatherly",boardId:info.boardId,itemId,itemTitle:g35safeString(item.title,65)+" · TND "+price.toFixed(3)+" / target "+target.toFixed(3)});
+    }
+   }catch(error){console.warn("Gatherly price watch unavailable:",String(error.message||error).slice(0,100))}
+  }
+  if(dirty)await GATHERLY_KV.put(key,JSON.stringify(alerts));
+ }
+}
+
+/* Gatherly V35 — recovery, decision rooms, watched prices, safe import and batch controls */
+const g35safeString=(v,max=200)=>String(v??"").trim().slice(0,max);
+const g35id=id=>/^[0-9a-f-]{36}$/i.test(String(id||""));
+const g35json=async r=>{if(Number(r.headers.get("content-length")||0)>220000)throw Error("Payload too large");return await r.json().catch(()=>({}))};
+async function g35Route(req,board,id,arr,user){
+ const group=arr[3],method=req.method,base="/api/boards/"+id;
+ if(group==="trash"){
+  if(method==="GET"&&arr.length===4){
+   const listing=await GATHERLY_KV.list({prefix:"trash:"+id+":",limit:1000});
+   const items=(await Promise.all(listing.keys.map(k=>GATHERLY_KV.get(k.name,"json")))).filter(Boolean);
+   return js({items:items.sort((a,b)=>b.deletedAt-a.deletedAt),hasMore:!listing.list_complete})
+  }
+  const itemId=arr[4],key="trash:"+id+":"+itemId;
+  if(!g35id(itemId))return fail("Invalid discovery",400);
+  const old=await GATHERLY_KV.get(key,"json");if(!old)return fail("Not in Trash",404);
+  if(method==="POST"&&arr[5]==="restore"){
+   if(await GATHERLY_KV.get("i:"+id+":"+itemId))return fail("Item already exists",409);
+   const item={...old};delete item.deletedAt;delete item.deletedBy;
+   if(!Array.isArray(board.collections)||!board.collections.some(x=>x.id===item.collectionId))item.collectionId="default";
+   await GATHERLY_KV.put("i:"+id+":"+itemId,JSON.stringify(item));await g35Index(id,item.url,itemId);await GATHERLY_KV.delete(key);
+   await g25BoardActivity(id,board,{type:"item_added",itemId,itemTitle:item.title,collectionId:item.collectionId||"default"},user);
+   return js({item})
+  }
+  if(method==="DELETE"){
+   await GATHERLY_KV.delete(key);
+   return js({success:true})
+  }
+  return fail("Unsupported Trash action",405)
+ }
+ if(group==="decisions"){
+  const key="decision:"+id;
+  if(method==="GET")return js({room:await GATHERLY_KV.get(key,"json")||{candidates:[],votes:{},winner:null,note:""}});
+  const raw=await g35json(req);
+  const existing=await GATHERLY_KV.get(key,"json")||{candidates:[],votes:{},winner:null,note:""};
+  const wanted=[...new Set((Array.isArray(raw.candidates)?raw.candidates:[]).filter(g35id))].slice(0,12);
+  const live=new Set();for(const candidate of wanted)if(await GATHERLY_KV.get("i:"+id+":"+candidate,"json"))live.add(candidate);
+  if(method==="PUT"){
+   const candidates=[...new Set((Array.isArray(raw.candidates)?raw.candidates:[]).filter(x=>g35id(x)&&live.has(x)))].slice(0,12);
+   const votes=Object.fromEntries(Object.entries(existing.votes||{}).filter(([,v])=>candidates.includes(v)));
+   const room={candidates,votes,winner:candidates.includes(existing.winner)?existing.winner:null,note:g35safeString(raw.note??existing.note,500),updatedAt:Date.now()};
+   await GATHERLY_KV.put(key,JSON.stringify(room));return js({room})
+  }
+  if(method==="POST"&&arr[4]==="vote"){
+   const choice=g35safeString(raw.itemId,40);
+   if(!existing.candidates.includes(choice))return fail("Choose a shortlisted item",400);
+   const voter=user?.id||"guest:"+g35safeString((req.headers.get("X-Board-Key")||"").slice(0,30));
+   if(!voter)return fail("Sign in or open your board",401);
+   existing.votes={...(existing.votes||{}),[voter]:choice};
+   existing.updatedAt=Date.now();await GATHERLY_KV.put(key,JSON.stringify(existing));return js({room:existing})
+  }
+  if(method==="POST"&&arr[4]==="choose"){
+   const winner=g35safeString(raw.itemId,40);
+   if(winner&&!existing.candidates.includes(winner))return fail("Winner must be shortlisted",400);
+   existing.winner=winner||null;existing.note=g35safeString(raw.note,500);existing.updatedAt=Date.now();
+   await GATHERLY_KV.put(key,JSON.stringify(existing));return js({room:existing})
+  }
+  return fail("Unsupported decision action",405)
+ }
+ if(group==="alerts"){
+  const userKey=user?.id||"board";
+  const key="watch:"+id+":"+userKey;
+  if(method==="GET")return js({alerts:await GATHERLY_KV.get(key,"json")||{}});
+  if(method==="PUT"){
+   const raw=await g35json(req),itemId=g35safeString(raw.itemId,40);
+   if(!g35id(itemId))return fail("Invalid item",400);
+   const item=await GATHERLY_KV.get("i:"+id+":"+itemId,"json");
+   if(!item)return fail("Item missing",404);
+   const alerts=await GATHERLY_KV.get(key,"json")||{};
+   if(raw.enabled===false)delete alerts[itemId];
+   else{
+    const threshold=g31Number(raw.target,"TND");
+    if(threshold===null||threshold<0||threshold>1e10)return fail("Enter valid TND target",400);
+    alerts[itemId]={target:threshold,createdAt:Date.now(),lastPrice:g31Number(item.price,"TND"),lastChecked:0,lastNotice:0}
+   }
+   await GATHERLY_KV.put(key,JSON.stringify(alerts));if(user){const idx="g35watchindex:"+id+":"+user.id;if(Object.keys(alerts).length)await GATHERLY_KV.put(idx,JSON.stringify({boardId:id,userId:user.id}));else await GATHERLY_KV.delete(idx)}return js({alerts})
+  }
+  if(method==="POST"&&arr[4]==="check"){
+   const alerts=await GATHERLY_KV.get(key,"json")||{},ids=Object.keys(alerts).slice(0,8),results=[];
+   for(const itemId of ids){
+    const alert=alerts[itemId],item=await GATHERLY_KV.get("i:"+id+":"+itemId,"json");
+    if(!item||!valid(item.url)){results.push({itemId,status:"missing"});continue}
+    try{
+     const meta=await g31Preview(await g26PublicPreview(item.url));
+     const price=g31Number(meta.price,"TND");
+     if(meta.priceStatus!=="found"||price===null){results.push({itemId,status:"unavailable"});continue}
+     const target=alert.target,below=price<=target,wasAbove=alert.lastPrice===null||alert.lastPrice>target;
+     alert.lastPrice=price;alert.lastChecked=Date.now();
+     if(below&&wasAbove)alert.lastNotice=Date.now();
+     results.push({itemId,status:below?"target_met":"checked",price,target});
+    }catch(e){results.push({itemId,status:"blocked"})}
+   }
+   await GATHERLY_KV.put(key,JSON.stringify(alerts));
+   return js({alerts,results})
+  }
+  return fail("Unsupported price watch action",405)
+ }
+ if(group==="links"){if(method!=="POST")return fail("Method not allowed",405);const raw=await g35json(req);const ids=[...new Set(Array.isArray(raw.ids)?raw.ids:[])].filter(g35id).slice(0,4),results=[];for(const itemId of ids){const item=await GATHERLY_KV.get("i:"+id+":"+itemId,"json");if(!item||!valid(item.url)){results.push({itemId,status:"missing"});continue}try{const meta=await g26PublicPreview(item.url);results.push({itemId,status:meta?.fetched?"reachable":"unverified"})}catch(e){results.push({itemId,status:"blocked"})}}return js({results})}
+if(group==="bulk"){
+  if(method!=="POST")return fail("Method not allowed",405);
+  const raw=await g35json(req),ids=[...new Set(Array.isArray(raw.ids)?raw.ids:[])].filter(g35id).slice(0,40);
+  if(!ids.length)return fail("Select discoveries",400);
+  const action=g35safeString(raw.action,30),result=[];
+  for(const itemId of ids){
+   const key="i:"+id+":"+itemId,item=await GATHERLY_KV.get(key,"json");
+   if(!item){result.push({itemId,status:"missing"});continue}
+   if(action==="archive"){item.archived=true;await GATHERLY_KV.put(key,JSON.stringify(item))}
+   else if(action==="unarchive"){item.archived=false;await GATHERLY_KV.put(key,JSON.stringify(item))}
+   else if(action==="purchased"){item.status="purchased";await GATHERLY_KV.put(key,JSON.stringify(item))}
+   else if(action==="move"){const target=g35safeString(raw.collectionId,40);if(target!=="default"&&!board.collections?.some(x=>x.id===target))return fail("Unknown collection",400);item.collectionId=target;await GATHERLY_KV.put(key,JSON.stringify(item))}
+   else if(action==="trash"){await GATHERLY_KV.put("trash:"+id+":"+itemId,JSON.stringify({...item,deletedAt:Date.now(),deletedBy:user?.id||null}),{expirationTtl:2592000});await GATHERLY_KV.delete(key);await g35Unindex(id,item.url,itemId)}
+   else return fail("Unsupported batch action",400);
+   result.push({itemId,status:"updated"})
+  }
+  return js({results:result})
+ }
+ if(group==="restore-backup"){
+  if(method!=="POST")return fail("Method not allowed",405);
+  const raw=await g35json(req);
+  if(!Array.isArray(raw.items)||raw.items.length>30)return fail("Import up to 30 discoveries at a time",400);
+  const records=[],existing=new Set();
+  const listing=await GATHERLY_KV.list({prefix:"i:"+id+":",limit:1000});
+  for(const entry of listing.keys){const item=await GATHERLY_KV.get(entry.name,"json");if(item?.url)existing.add(g35Url(item.url))}
+  for(const candidate of raw.items){
+   if(!candidate||typeof candidate!=="object")continue;
+   let input;try{input=await g31Write(candidate)}catch{records.push({status:"rate_unavailable",title:g35safeString(candidate.title,80)});continue}
+   const item=clean(input);if(input.priceOrigin)item.priceOrigin=g31Origin(input.priceOrigin);
+   if(!item.title||!valid(item.url)){records.push({status:"invalid",title:g35safeString(candidate.title,80)});continue}
+   const normalized=g35Url(item.url);
+   if(existing.has(normalized)||await GATHERLY_KV.get("g35idx:"+id+":"+await authDigest(normalized))){records.push({status:"duplicate",title:item.title});continue}
+   item.collectionId=Array.isArray(board.collections)&&board.collections.some(c=>c.id===item.collectionId)?item.collectionId:"default";
+   const idNew=crypto.randomUUID(),newItem={...item,id:idNew,created:Date.now(),favorite:!!candidate.favorite,savedBy:user?.id||null,savedByName:user?.name||"Guest"};
+   if(Array.isArray(candidate.priceHistory))newItem.priceHistory=candidate.priceHistory.filter(p=>p&&typeof p==="object").slice(0,40);
+   newItem.images=v15Images(candidate.images,candidate.image);
+   await GATHERLY_KV.put("i:"+id+":"+idNew,JSON.stringify(newItem));await g35Index(id,newItem.url,idNew);
+   existing.add(normalized);records.push({status:"imported",title:item.title,id:idNew})
+  }
+  return js({results:records})
+ }
+ return null
+}
+async function g35Index(boardId,url,itemId){await GATHERLY_KV.put("g35idx:"+boardId+":"+await authDigest(g35Url(url)),itemId)}
+async function g35Unindex(boardId,url,itemId){const key="g35idx:"+boardId+":"+await authDigest(g35Url(url));if(await GATHERLY_KV.get(key)===itemId)await GATHERLY_KV.delete(key)}
+function g35Url(raw){
+ try{const u=new URL(raw);u.hash="";u.hostname=u.hostname.toLowerCase().replace(/^www\./,"");for(const key of [...u.searchParams.keys()])if(/^(utm_|fbclid$|gclid$|igshid$|mc_)/i.test(key))u.searchParams.delete(key);u.searchParams.sort();return u.origin+u.pathname.replace(/\/$/,"")+u.search}
+ catch{return g35safeString(raw,500)}
+}
+
+async function handle(r){let u=new URL(r.url),p=u.pathname;if(p==="/")return new Response(page,{headers:{"content-type":"text/html;charset=utf-8","x-content-type-options":"nosniff","content-security-policy":"default-src 'self' https: data:; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self' https://accounts.google.com; frame-src https://accounts.google.com https://www.youtube-nocookie.com https://www.youtube.com https://player.vimeo.com https://www.tiktok.com https://www.instagram.com https://www.facebook.com https://www.dailymotion.com https://streamable.com; media-src https:; object-src 'none'; frame-ancestors 'none'"}});if(p==="/manifest.webmanifest")return new Response("{\"id\":\"/gatherly\",\"name\":\"Gatherly — Save, Share & Compare\",\"short_name\":\"Gatherly\",\"description\":\"Save anything, compare together\",\"start_url\":\"/\",\"scope\":\"/\",\"display\":\"standalone\",\"background_color\":\"#141416\",\"theme_color\":\"#141416\",\"icons\":[{\"src\":\"/icon-192.png\",\"type\":\"image/png\",\"sizes\":\"192x192\",\"purpose\":\"any maskable\"},{\"src\":\"/icon-512.png\",\"type\":\"image/png\",\"sizes\":\"512x512\",\"purpose\":\"any maskable\"}],\"share_target\":{\"action\":\"/\",\"method\":\"GET\",\"params\":{\"title\":\"title\",\"text\":\"text\",\"url\":\"url\"}}}",{headers:{"content-type":"application/manifest+json","cache-control":"public,max-age=300"}});if(p==="/icon-192.png")return new Response(Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAMAAABlApw1AAADAFBMVEUUFBbK/2QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD0gF+QAAABj0lEQVR42u3cQZKDMAwFUXT/S896FlOTYLD04fU+sVpOFUaOdBwAAAAAAAAAAAAAACCNOkd08EMk6grCw+9TqCtJj3+/QV1PevxbDaqyDaqyDaqyDaqyDaqyDc4EM8rgZCBjBM6HMcNgJYgRBmsR9AusBtBusLx8s0BtEqixG9C9BVes3SlQ2wRq7ga0bgGBZoGrFm4zIECAAAEC/UehzsPQR/WTT77mE5WdArckZZ/ATWnZJjA1Lx+udF9m9giMT80/yyTk5tECIcn5c5Gc7DxUICo95wS+PSINFFg4pN4u8N0H+n+hBAgQIEDAg+x1R4nhhznvA+0C8a+UqhL9AvGFrfzSYn5x9wHl9fwLjgdcMT3hks89MQECBAgQmP8g88fXCIH4P3+PFnhHA0R+C8pkgZe0YS03wvV3wsW3ItZSM+iMbtDz7bhT+nF/V1vmxH93R/qwnvSJ8edPNcifK5E/2SN/tkr+dJv8+UJH/ISnI3/G1hE/5ewyhaOX7OjXJA4AAAAAAAAAAAAAAN7GD4U3G4YChbcUAAAAAElFTkSuQmCC"),c=>c.charCodeAt(0)),{headers:{"content-type":"image/png","cache-control":"public,max-age=86400"}});if(p==="/icon-512.png")return new Response(Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAMAAADDpiTIAAADAFBMVEUUFBbK/2QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD0gF+QAAAFJElEQVR42u3dUW4USxAF0cn9b5oFYDBoXD1VFed8PiSmnTfUWHoCv14AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADxqPs8I1eV1YHwRGF8E1teA9TVgfglYXwPml4D5JWB+CZhfAvZXgPklYH4J2F8B9ldAfX4J2F8B9f0VEJ9fAvZXQH1/BdT3V0B9fwXU91dAfX8F1PdXQH1/BdT3V0B9fwXU91eAAEjvr4CP7r9Fg8b/yO03KtH8j599rxrN/9ru3gq4dv9jm7T/05dWwHUB7Fum/Tc9sgLuCeC+Ou3/yIEV0N5fATcEcHuj9l97WwWcHUAkU/svPKwCzg2gVar9V11VAWcGkIzV/ktOqoDzAij3KgAB2P+lgHIAkvUC8ArwAvAKEIAA7K8AAQggFYBuvQC8ArwAlCsAARQDkK4XgFeAAAQgAAH4FkC8XgBeAQIQgAAEIAAB+B7Qd4ECEIAABOBbAN8ECEAAAhCAAAQgAAEIQAACEIAABCAAAQhAAC74wacXgAAEIAABCEAAAhDAficcAQhAANvc8Ovf95GHX5aFAN660xMBrA1bAG/faOW/D7A+bgGcfSEBLD7R9YEL4PzrCGDReRKRC+COywjgp0+j83QAndIFcM9VBPBTZ9F6OwCxtwNQezsAubcD0Hs7AMG3A1B8OwDJtwPQvAAEEA5A9O0AVC8AAYQDkL0ABBAOQPcCEEA4AOELQADhAJQvgFWf/t6vC+D4AP7yuz/w0QJ4ffgKf/iMRz9aADsEsN9HC0AAAlh/hG0/WgACEIAABCAAAQigHcAHH+Dy+AUgAAEIQAACEIAABCAAAQhAAAIQgAAEIAABCEAAAhCAAAQggLuP4H8HC0AAAhCAAAQgAAHsGYC/GCIAAQhg8cf/038WwG1n8NfD8wG89+sC8CIUgDus+7oFIAAB+IciBSCAfAD+sWgBCCAdgB8YIQABpAPwQ6PqAfixcQIQQDoAPzq2HoAfHl0PwI+PrwcwsS9XAJddZASQPskIIH2TEUD6KCOA9FVGAOmzjAB+8C4T+TIFcMllRgA/fpopfI0CuOA6MwJYdZ65/esTwOEXmhHA6hN9d6OFN5zlX5sA3rvT6hN+89ECeCyA34/1yAm/+WgBPBvA8yeco59eAAIIBCBfAQhAAAIQgAAEIIBeAPoVgAAEIAABCEAAAhCAAAQgAAEIQAACEIAABCCA6wvQrwAE4M8AfwIIQAACEIAABCAAASjA/gIQgAAEIAABKMD+AhDA3QHMqc8tAAEoYOND2l8AAgifcgTQfgXYv31MLwABCCBcgP3b9xwBtF8B9m+/ArwADgxgjnrYXAAnFWD/QwOYc540GMAxBdj/4ADmkMdMBnBGAfY/PIA54RmjARxQgP0vCGC2f8BsAJsfeOyfLsD+FwXw/1eeEcBdBcymj9Xe/9FLz5YPFQ9gw2OP/S8u4LuDz9j/9gL+fPQZ+ycC+OL0s8VTKKDG+O0CTN8uwPACIFyA2dsFGL1dgMnbBRi8XYC52wUYu12AqdsFGLpdgJnbBRi5XYCJ0wmYt12AcdsFmDadgFnbBRi1XYBJ0wmYM52AKdsFGDKdgBHTCRgwnYDx0gkYrtyAydIJmKvcgKHKDZgoHIFpwhGYpNqBEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADgab8AnqG7yvnG1qoAAAAASUVORK5CYII="),c=>c.charCodeAt(0)),{headers:{"content-type":"image/png","cache-control":"public,max-age=86400"}});if(p==="/health")return js({ok:true});if(p==="/sw.js")return new Response("const CACHE=\"gatherly-shell-v35\";self.addEventListener(\"install\",e=>{e.waitUntil(caches.open(CACHE).then(async cache=>{for(const url of [\"/\",\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"]){try{await cache.add(url)}catch{}}}).then(()=>self.skipWaiting()))});self.addEventListener(\"activate\",e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith(\"gatherly-shell-\")&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim()))});self.addEventListener(\"fetch\",event=>{const req=event.request;if(req.method!==\"GET\")return;const url=new URL(req.url);if(url.origin!==location.origin)return;if(req.mode===\"navigate\"){event.respondWith(fetch(req).then(response=>{if(response.ok&&response.headers.get(\"content-type\")?.includes(\"text/html\"))caches.open(CACHE).then(c=>c.put(\"/\",response.clone())).catch(()=>{});return response}).catch(async()=>await caches.match(\"/\")||Response.error()));return}if([\"/manifest.webmanifest\",\"/icon-192.png\",\"/icon-512.png\"].includes(url.pathname)){event.respondWith(caches.match(req).then(c=>c||fetch(req).then(response=>{if(response.ok)caches.open(CACHE).then(c=>c.put(req,response.clone())).catch(()=>{});return response})));return}});",{headers:{"content-type":"application/javascript"}});if(p==="/api/boards"&&r.method==="POST"){let d=await r.json().catch(()=>({})),id=crypto.randomUUID(),key=crypto.randomUUID()+crypto.randomUUID();await GATHERLY_KV.put("b:"+id,JSON.stringify({title:String(d.title||"My collection").slice(0,75),hash:await hashed(key),created:Date.now()}));const owner=await authLookup(r);if(owner)await authLinkBoard(owner,id,key);return js({id,key})}if(r.method!=="GET"&&r.method!=="HEAD"&&p.startsWith("/api/")){let origin=r.headers.get("Origin");if(origin&&origin!==u.origin)return fail("Invalid origin",403)}if(p.startsWith("/media/"))return mediaFetch(r,p);let sessionUser=await authLookup(r);if(p.startsWith("/api/auth/")||p.startsWith("/api/my/"))return authEndpoint(r,u,p,sessionUser);if(p.startsWith("/api/social/notifications"))return g25Notifications(r,p,sessionUser);if(p.startsWith("/api/social/"))return g23Social(r,u,p,sessionUser);if(p==="/api/media")return mediaEndpoint(r,u,sessionUser);if(p==="/api/health/fetch")return g32BatchHealth(r,sessionUser);if(p==="/api/preview")return v8PreviewEndpoint(r,sessionUser,u);if(p==="/api/media/import-url")return v8ImportImageEndpoint(r,sessionUser);if(p==="/api/shortcut/prepare")return v8ShortcutPrepare(r,u);if(p==="/api/shortcut/draft")return v16ShortcutDraft(r,sessionUser,u);if(p==="/api/shortcut/inbox")return v17ShortcutInbox(r,sessionUser);if(p==="/api/shortcut/save")return v8ShortcutSave(r,u);let arr=p.split("/").filter(Boolean);if(arr[0]!=="api"||arr[1]!=="boards"||!arr[2])return fail("Not found",404);let id=arr[2],board=await GATHERLY_KV.get("b:"+id,"json");if(!board)return fail("Collection not found",404);let key=r.headers.get("X-Board-Key")||"";let membership=sessionUser?await GATHERLY_KV.get("ub:"+sessionUser.id+":"+id,"json"):null;let goodKey=!!(key&&await hashed(key)===board.hash);if(!goodKey&&!membership)return fail("Invalid invite link",403);if(goodKey&&sessionUser&&!membership)await authLinkBoard(sessionUser,id,key);let prefix="i:"+id+":";const validCollection=(cid)=>!cid||cid==="default"||Array.isArray(board.collections)&&board.collections.some(c=>c.id===cid);if(arr.length===3&&r.method==="GET"){if(sessionUser){let k="bm:"+id+":"+sessionUser.id;if(!await GATHERLY_KV.get(k))await GATHERLY_KV.put(k,JSON.stringify({id:sessionUser.id,linked:Date.now()}))}let listing=await GATHERLY_KV.list({prefix,limit:1000}),items=await Promise.all(listing.keys.map(x=>GATHERLY_KV.get(x.name,"json")));return js({board:{id,title:board.title,collections:Array.isArray(board.collections)?board.collections:[{id:"default",name:board.title||"My wishlist",icon:"💜",color:"#ffc2d7",description:"Your original saved discoveries"}]},items:items.filter(Boolean).sort((a,b)=>b.created-a.created),authors:await (async()=>{let ids=[...new Set(items.filter(Boolean).map(x=>x.savedBy).filter(Boolean))].slice(0,50);let found=await Promise.all(ids.map(i=>GATHERLY_KV.get("u:"+i,"json")));return Object.fromEntries(ids.map((id,i)=>[id,publicUser(found[i])]).filter(e=>e[1]))})(),collaborators:await g19BoardCollaborators(id,sessionUser),hasMore:!listing.list_complete})}
+if(["trash","decisions","alerts","bulk","restore-backup","links"].includes(arr[3]))return g35Route(r,board,id,arr,sessionUser);if(arr[3]==="cart")return g20CartEndpoint(r,id,arr,u,sessionUser);if(arr[3]==="community")return proCommunity(r,arr,id,sessionUser);
+if(arr[3]==="collections"){
+let cols=Array.isArray(board.collections)?board.collections:[{id:"default",name:"My wishlist",icon:"🎁",color:"#ffc2d7",description:"My original saved discoveries"}];
+if(r.method==="GET"&&arr.length===4)return js({collections:cols});
+if(r.method==="POST"||r.method==="PUT"){
+let raw=await r.json().catch(()=>({}));
+let name=String(raw.name||"").trim().slice(0,60);if(!name)return fail("Collection name required");
+let icon=String(raw.icon||"✦").slice(0,8),color=/^#[0-9a-fA-F]{6}$/.test(raw.color)?raw.color:"#b69df4",description=String(raw.description||"").slice(0,180);
+if(r.method==="POST"){if(cols.length>=100)return fail("Maximum 100 collections per board");cols.push({id:crypto.randomUUID(),name,icon,color,description})}
+else{let c=cols.find(x=>x.id===arr[4]);if(!c)return fail("Collection not found",404);Object.assign(c,{name,icon,color,description})}
+board.collections=cols;await GATHERLY_KV.put("b:"+id,JSON.stringify(board));await g25BoardActivity(id,board,{type:r.method==="POST"?"collection_created":"collection_updated",collectionId:r.method==="POST"?cols[cols.length-1].id:arr[4],collectionName:name},sessionUser);return js({collections:cols});
+}
+if(r.method==="DELETE"&&arr[4]&&arr[4]!=="default"){
+let c=cols.find(x=>x.id===arr[4]);if(!c)return fail("Collection not found",404);
+let listing=await GATHERLY_KV.list({prefix:"i:"+id+":",limit:1000});
+for(let entry of listing.keys){let item=await GATHERLY_KV.get(entry.name,"json");if(item?.collectionId===arr[4])return fail("Move all discoveries out of this collection before deleting")}
+board.collections=cols.filter(x=>x.id!==arr[4]);await GATHERLY_KV.put("b:"+id,JSON.stringify(board));await g25BoardActivity(id,board,{type:"collection_deleted",collectionId:arr[4],collectionName:c.name},sessionUser);return js({collections:board.collections});
+}
+return fail("Method not allowed",405)
+}
+
+if(arr[3]==="collections"){
+ const defaultCol={id:"default",name:board.title||"My wishlist",icon:"💜",color:"#ffc2d7",description:"Your original saved discoveries"};
+ let cols=Array.isArray(board.collections)?board.collections:[defaultCol];
+ if(r.method==="GET"&&arr.length===4)return js({collections:cols});
+ if(r.method==="POST"&&arr.length===4){
+  const d=await r.json().catch(()=>({}));
+  const name=String(d.name||"").trim().slice(0,60);
+  if(!name)return fail("Collection name is required");
+  if(cols.length>=100)return fail("Maximum 100 collections per dreamboard");
+  cols.push({id:crypto.randomUUID(),name,icon:String(d.icon||"✦").slice(0,12),color:/^#[a-fA-F0-9]{6}$/.test(d.color)?d.color:"#bda2f7",description:String(d.description||"").slice(0,180)});
+  board.collections=cols;await GATHERLY_KV.put("b:"+id,JSON.stringify(board));await g25BoardActivity(id,board,{type:r.method==="POST"?"collection_created":"collection_updated",collectionId:r.method==="POST"?cols[cols.length-1].id:arr[4],collectionName:name},sessionUser);return js({collections:cols});
+ }
+ if(r.method==="PUT"&&arr[4]){
+  const col=cols.find(x=>x.id===arr[4]);if(!col)return fail("Collection not found",404);
+  const d=await r.json().catch(()=>({})),name=String(d.name||"").trim().slice(0,60);if(!name)return fail("Collection name required");
+  Object.assign(col,{name,icon:String(d.icon||"✦").slice(0,12),color:/^#[a-fA-F0-9]{6}$/.test(d.color)?d.color:"#bda2f7",description:String(d.description||"").slice(0,180)});
+  board.collections=cols;await GATHERLY_KV.put("b:"+id,JSON.stringify(board));await g25BoardActivity(id,board,{type:r.method==="POST"?"collection_created":"collection_updated",collectionId:r.method==="POST"?cols[cols.length-1].id:arr[4],collectionName:name},sessionUser);return js({collections:cols});
+ }
+ if(r.method==="DELETE"&&arr[4]&&arr[4]!=="default"){
+  if(!cols.some(x=>x.id===arr[4]))return fail("Collection not found",404);
+  const listing=await GATHERLY_KV.list({prefix:"i:"+id+":",limit:1000});
+  if(!listing.list_complete)return fail("This collection is too large to delete safely");
+  for(const entry of listing.keys){const item=await GATHERLY_KV.get(entry.name,"json");if((item?.collectionId||"default")===arr[4])return fail("Move all discoveries before deleting this collection")}
+  board.collections=cols.filter(x=>x.id!==arr[4]);await GATHERLY_KV.put("b:"+id,JSON.stringify(board));return js({collections:board.collections});
+ }
+ return fail("Method not allowed",405);
+}
+
+if(arr[3]==="items"){if(arr.length===4&&r.method==="POST"){let d=clean(await g31Write(await r.json().catch(()=>({}))));if(!valid(d.url)||!d.title)return fail("Please provide a name and valid URL");if(!validCollection(d.collectionId))return fail("Collection not found");let item={...d,id:crypto.randomUUID(),created:Date.now(),favorite:false,savedBy:sessionUser?.id||null,savedByName:sessionUser?.name||"Guest"};item.imag

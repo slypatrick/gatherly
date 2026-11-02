@@ -1,0 +1,16 @@
+{
+  "name": "gatherly",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Gatherly Cloudflare Workers public-source snapshot",
+  "scripts": {
+    "build": "node scripts/build-worker.mjs",
+    "check": "node scripts/check-repo.mjs",
+    "deploy": "npm run build && wrangler deploy --config wrangler.jsonc",
+    "deploy:staging": "npm run build && wrangler deploy --config wrangler.staging.jsonc"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

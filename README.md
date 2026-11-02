@@ -1,33 +1,47 @@
 # Gatherly
 
-Gatherly is a mobile-first discovery and wishlist app for saving and organizing products, pages, and links into shared collections. It supports collaborative boards, item status, comparison features and multiple currencies, with TND as the preferred display currency.
+Gatherly is a mobile-first collaborative discovery and wishlist app for saving links, products, inspiration, and marketplace finds into shared collections. It supports boards, collaborators, item status, comparisons, and product information in TND.
 
-## Production architecture
+This repository is a **public-source snapshot** of the actual Cloudflare deployment as of **November 2, 2026**. It contains code, configuration templates, and an empty legacy database schema. It contains **no account records, personal data, private KV contents, or database rows**.
 
-This repository is an **exported snapshot** of the existing Cloudflare deployment. It is public **source code only** and contains no production KV/D1 records or account information.
+## Source files
 
-- `workers/gatherly-compare.js` – main production application (legacy Cloudflare Service Worker script; inlines its HTML/CSS/JS).
-- `workers/gatherly-shortcut-download.js` – iOS shortcut download helper.
-- `workers/gatherly-shortcut-v6.js` – alternate iOS shortcut helper.
-- `legacy/gatherly-hub.mjs` – earlier D1-backed Gatherly hub, kept for reference.
-- `database/legacy-hub-schema.sql` – structure of the earlier D1 database, **without records**.
-- `wrangler.jsonc` – template for the current main Worker and production cron schedule.
-- `config/README.md` – Cloudflare resource inventory and migration notes.
-- `docs/DEPLOYMENT.md` – setup and verification checklist.
-- `AGENTS.md` – instructions for Claude or other coding assistants.
+| File or folder | Description |
+| --- | --- |
+| [workers/compare.parts/](workers/compare.parts/) | Exactly preserved segments of the current production \`gatherly-compare\` Worker |
+| [scripts/build-worker.mjs](scripts/build-worker.mjs) | Concatenates segments into the original \`dist/gatherly-compare.js\`, validating its SHA-256 hash |
+| [workers/gatherly-shortcut-download.js](workers/gatherly-shortcut-download.js) | iOS share shortcut download Worker |
+| [workers/gatherly-shortcut-v6.js](workers/gatherly-shortcut-v6.js) | Additional iOS share shortcut Worker |
+| [legacy/gatherly-hub.mjs](legacy/gatherly-hub.mjs) | Earlier D1-backed Gatherly hub Worker |
+| [database/legacy-hub-schema.sql](database/legacy-hub-schema.sql) | Structural D1 schema only; **no user data** |
+| [wrangler.jsonc](wrangler.jsonc) | Main Worker destination-account configuration template |
+| [wrangler.staging.jsonc](wrangler.staging.jsonc) | Staging Worker with a **different** KV namespace |
+| [config/](config/) | Optional component config templates |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Cloudflare deployment and safe data-migration instructions |
+| [AGENTS.md](AGENTS.md) | Instructions for Claude or other coding agents |
 
-## Important before deployment
+The production Worker is relatively large and includes the app's HTML/CSS/JS. For reliable export through the connected services, its original source was split into numbered **source segments**. The build script joins these segments verbatim and refuses to proceed if the hash differs from production. The built \`dist/\` file is gitignored, but is ready for Wrangler deployment.
 
-The **main Gatherly app stores state in a Cloudflare KV namespace** bound as `GATHERLY_KV`. Production and staging use different KV namespaces. The older `gatherly-hub` app uses a separate Cloudflare D1 database. Public source does not contain stored account data, collection contents, transactions, private item URLs, user tokens, or KV/D1 snapshots.
+## Build locally
 
-Never reuse the production namespace ID when testing. Create new KV namespaces in the destination account and update the `wrangler.jsonc` binding IDs. Verify the `0 7 * * *` UTC scheduled job before enabling it in production.
+\`\`\`sh
+npm install
+npm run build
+npm run check
+\`\`\`
 
-For details, follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Migrate private data separately using access-controlled exports, and don't switch traffic until reconciliation succeeds.
+## Data architecture
 
-## Security
+- **Current application:** Cloudflare Worker \`gatherly-compare\` with KV binding \`GATHERLY_KV\`.
+- **Production data:** Stored in the source Cloudflare KV namespace, **not included here**.
+- **Staging:** Separate Worker \`gatherly-compare-staging\` with **its own** KV namespace.
+- **Older system:** Worker \`gatherly-hub\` using the D1 database \`gatherly-discovery-hub\`.
+- **Scheduled task:** Production Worker cron \`0 7 * * *\` (UTC). Do not enable it in staging.
 
-Keep personal records, API tokens, OAuth secrets, password hashes, and session data out of Git. Do not add `.env`, `.dev.vars`, KV exports, or D1 exports. Running this public repository does **not** transfer your live accounts or saved items.
+Follow [the deployment guide](docs/DEPLOYMENT.md) to provision new Cloudflare namespaces. Never point a test Worker at the original production KV binding.
 
-## Live deployment
+## Safety and status
 
-Publishing or editing this GitHub repository does **not** automatically deploy changes to Cloudflare. The existing production application remains the source of truth until you explicitly authorize an account migration and cutover.
+The existing live Cloudflare deployment has **not been changed**. Pushing this repository does not automatically deploy or migrate data. A separate controlled KV/D1 export/import, security review, and explicit cutover are required to move live accounts, boards, saved items, and collaborations.
+
+**Never commit** account credentials, OAuth secrets, passwords, user sessions, KV exports, D1 exports, or private item content.

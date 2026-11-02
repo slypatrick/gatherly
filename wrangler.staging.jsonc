@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gatherly-compare-staging",
+  "main": "dist/gatherly-compare.js",
+  "compatibility_date": "2026-10-31",
+  "workers_dev": true,
+  "kv_namespaces": [
+    {
+      "binding": "GATHERLY_KV",
+      "id": "REPLACE_WITH_NEW_STAGING_KV_NAMESPACE_ID"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gatherly-hub",
+  "main": "legacy/gatherly-hub.mjs",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gatherly-discovery-hub",
+      "database_id": "REPLACE_WITH_NEW_LEGACY_D1_DATABASE_UUID"
+    }
+  ]
+}
