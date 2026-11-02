@@ -14,7 +14,7 @@ html body{background:var(--u-bg)!important;color:var(--u-text);-webkit-font-smoo
 html body :focus-visible{outline:2px solid var(--u-lime)!important;outline-offset:3px!important;border-radius:inherit}
 
 /* ---------- Header ---------- */
-html body header.top{background:rgba(11,11,14,.72)!important;-webkit-backdrop-filter:saturate(1.6) blur(18px);backdrop-filter:saturate(1.6) blur(18px);border-bottom:1px solid var(--u-line)!important;box-shadow:none!important}
+html body header.top{position:sticky!important;top:0;z-index:100!important;background:rgba(11,11,14,.72)!important;-webkit-backdrop-filter:saturate(1.6) blur(18px);backdrop-filter:saturate(1.6) blur(18px);border-bottom:1px solid var(--u-line)!important;box-shadow:none!important}
 html body header.top .wordmark{font-weight:800;letter-spacing:-.04em}
 html body header.top .wordmark span{color:var(--u-lime)}
 html body header.top .top-center{color:var(--u-muted);letter-spacing:.14em;font-weight:700}
@@ -22,10 +22,6 @@ html body header.top .top-actions{display:flex;align-items:center;gap:8px}
 html body header.top .top-actions>button:not(#g40x){background:var(--u-raised)!important;border:1px solid var(--u-line)!important;border-radius:14px!important;color:var(--u-text)!important;transition:transform .18s var(--u-ease),background .18s,border-color .18s}
 html body header.top .top-actions>button:not(#g40x):hover{background:var(--u-raised-2)!important;border-color:var(--u-line-strong)!important}
 html body header.top .top-actions>button:active{transform:scale(.93)}
-#g40TopLogout{display:none;place-items:center}
-#g40TopLogout.show{display:grid}
-#g40TopLogout svg,#g40SideLogout svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
-#g40TopLogout.armed,#g40SideLogout.armed{background:#ff6b7a!important;color:#1a0709!important;border-color:transparent!important}
 
 /* ---------- Page rhythm & type ---------- */
 html body .page h1,html body .page h2:first-child{letter-spacing:-.035em}
@@ -83,9 +79,6 @@ html body .g18-folder-kicker{letter-spacing:.16em}
 html body .shell>aside,html body aside.sidebar{background:var(--u-surface)!important;border-right:1px solid var(--u-line)!important}
 html body .nav{border-radius:14px!important;transition:background .2s,color .2s,transform .18s var(--u-ease)}
 html body .nav.active:not(#g40x){background:var(--u-lime)!important;color:var(--u-lime-ink)!important;box-shadow:0 8px 22px -10px rgba(189,255,114,.55)}
-#g40SideLogout{display:none;align-items:center;gap:12px;width:100%;margin-top:4px;padding:11px 14px;border:1px solid var(--u-line);background:transparent;color:var(--u-muted);border-radius:14px;font:inherit;font-weight:700;cursor:pointer;transition:background .2s,color .2s}
-#g40SideLogout.show{display:flex}
-#g40SideLogout:hover{background:var(--u-raised);color:var(--u-text)}
 html body .side-foot{border-radius:var(--u-r-md)!important;background:linear-gradient(160deg,#1c2118,#16161b)!important;border:1px solid rgba(189,255,114,.18)!important}
 
 /* ---------- Modals & forms ---------- */
@@ -117,6 +110,20 @@ html body #g10Filters:not(#g40x):hover,html body #g10Tools:not(#g40x):hover,html
 html body .g15-gallery{background:var(--u-raised)!important}
 html body #tileNew:not(#g40x){background:linear-gradient(160deg,var(--u-raised),var(--u-surface))!important;border:1px dashed rgba(189,255,114,.45)!important;color:var(--u-text)!important}
 html body #tileNew:not(#g40x):hover{border-color:var(--u-lime)!important;background:linear-gradient(160deg,var(--u-raised-2),var(--u-raised))!important}
-html body header.top .top-actions>#g40TopLogout:not(#g40x){width:44px;height:44px;min-width:44px;padding:0;border-radius:14px!important}
 html body #g10FilterPanel:not(#g40x),html body #g10ToolsPanel:not(#g40x){background:var(--u-surface)!important;border:1px solid var(--u-line-strong)!important;border-radius:var(--u-r-md)!important}
 html body #g10FilterPanel select:not(#g40x){background-color:var(--u-raised)!important;border:1px solid var(--u-line)!important}
+
+/* ---------- Avatar back in the top-right corner (all sizes) ---------- */
+html body header.top .top-actions>#topAvatar:not(#g40x){display:grid!important;place-items:center;order:99;flex:none;width:42px!important;height:42px!important;min-width:42px!important;min-height:42px!important;padding:0!important;border-radius:50%!important;overflow:hidden;background:var(--u-raised)!important;border:1.5px solid var(--u-lime)!important;box-shadow:0 0 0 3px rgba(189,255,114,.12)}
+html body header.top .top-actions>#topAvatar:not(#g40x):active{transform:scale(.93)}
+
+/* ---------- Sign out lives inside the profile ---------- */
+html body #g5Logout:not(#g40x){background:rgba(255,107,122,.12)!important;color:#c0283a!important;border:1px solid rgba(255,107,122,.5)!important;border-radius:14px!important;font-weight:800;min-height:46px;display:flex;align-items:center;justify-content:center;gap:8px}
+html body #g5Logout:not(#g40x):hover{background:rgba(255,107,122,.2)!important}
+html body .g8-signout-row{margin-top:18px!important;padding-top:14px!important}
+html body .g8-signout-row #g5Logout{width:100%}
+html body .g40-out-row{margin:10px 0 2px;display:flex}
+html body #g40ProfileOut{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;min-height:44px;border-radius:14px;border:1px solid rgba(214,50,72,.45);background:rgba(255,107,122,.12);color:#b4233a;font:inherit;font-weight:800;cursor:pointer;transition:transform .18s var(--u-ease),background .2s}
+html body #g40ProfileOut:hover{background:rgba(255,107,122,.22)}
+html body #g40ProfileOut:active{transform:scale(.96)}
+html body #topAvatar:not(#g40x) svg{filter:invert(1) brightness(.95)}
